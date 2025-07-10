@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -P pq84
+#PBS -q normalbw
+#PBS -l walltime=02:00:00,mem=10GB,jobfs=1GB,ncpus=8
+#PBS -l storage=gdata/u86+scratch/u86+gdata/pq84+scratch/pq84
+#PBS -j oe
+#PBS -m abe
+#PBS -N bulk_RNAseq_pipeline_test
+#PBS -M rhys.gillman@jcu.edu.au
+
+#############################################
+############## PBS Setup ####################
+#############################################
+cd $PBS_O_WORKDIR                           #
+shopt -s expand_aliases                     #
+source /etc/profile.d/modules.sh            #
+echo "Job identifier is $PBS_JOBID"         #
+echo "Working directory is $PBS_O_WORKDIR"  #
+#############################################
+
+#./run_pipeline.sh -c setup.cfg
+
+# make temporary config file
+tmp_cfg=$(mktemp)
+# make sure it is not in interactive mode
+sed 's/^interactive=true$/interactive=false/' setup.cfg > "$tmp_cfg"
+
+# submit job
+./run_pipeline.sh -c "$tmp_cfg"
+
+# remove tmp file
+rm "$tmp_cfg"
