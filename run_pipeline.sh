@@ -107,6 +107,72 @@ exec > >(tee "$final_log") 2>&1
 cat "$early_log" >> "$final_log"
 rm -f "$early_log"
 
+
+# setup resource monitoring log
+
+RESOURCE_LOG="$output_dir/logs/resource_utilisation_${timestamp}.log"
+: > "$RESOURCE_LOG"      # truncate or create
+
+
+
+echo -e "\n\n"
+echo "Config file read successfully"
+echo "Running the following steps of pipeline"
+echo "Raw Read QC: $run1_rawqc"
+echo "Read Trimming: $run2_trimming"
+echo "Trimmed Read QC: $run3_trimqc"
+echo "Generate Aligner Index (optional): $run4o1_alignment_generate_ref"
+echo "Alignment: $run4_alignment"
+echo "Alignment QC: $run5_alignqc"
+echo "Read Quantification: $run6_quant"
+echo -e "\n\n"
+
+##################
+# More Functions #
+##################
+
+monitor_process() {
+  local process_name="$1"; shift
+  echo "===== $process_name START: $(date '+%F %T') =====" | tee -a "$RESOURCE_LOG"
+
+  #/usr/bin/time -v -o "$RESOURCE_LOG" --append "$@" 
+  #{ /usr/bin/time -v "$@" ; } 2>&1 | tee -a "$RESOURCE_LOG"
+  
+  # uses the time function to capture resource utilisation information
+  # output is teed to both stdout and and the log file
+  # grep filtered to only key information
+  
+  # create a tmp file for logging
+  local _time_log
+  _time_log=$(mktemp)
+
+  # run the command under time function, send the command's stdout+stderr to the main log
+  # capture only the time -v verbose stats into tmp $_time_log via -o
+  /usr/bin/time -v -o "$_time_log" --append "$@" 2>&1 \
+    | tee -a "$RESOURCE_LOG"
+
+  # pull out relevant fields and tee them
+  grep -E 'Command being timed:|User time \(seconds\):|System time \(seconds\):|Percent of CPU this job got:|Elapsed \(wall clock\) time|Maximum resident set size \(kbytes\):|File system inputs:|File system outputs:' \
+  "$_time_log" \
+    "$_time_log" \
+    | tee -a "$RESOURCE_LOG" \
+    || true
+  # remove tmp log file
+  rm "$_time_log"
+  
+  
+  
+  #{
+  #  /usr/bin/time -v "$@" 2>&1 \
+  #    | grep -E '^( *Command being timed:| *User time| *System time| *Percent of CPU| *Elapsed| *Maximum resident set size| *File system inputs| *File system outputs)' \
+  #    || true
+  #} | tee -a "$RESOURCE_LOG"
+
+  echo "===== $process_name END:   $(date '+%F %T') =====" | tee -a "$RESOURCE_LOG"
+}
+
+
+
 #####################
 # Setup Environment #
 #####################
@@ -168,18 +234,19 @@ if [ "$run1_rawqc" = true ]; then
   ##############################
 
   
-  echo -e "\n\n---------------------------"
+  echo -e "\n\n-------------------------------"
   echo "**Step 1: Raw read QC checking"
-  echo -e "---------------------------\n\n"
+  echo -e "-------------------------------\n\n"
   
   mkdir -p "$output_dir/qc/raw_reads"
   mkdir -p "$output_dir/logs/fastqc"
   
   # run fastqc on all samples in parallel
-  $fastqc_path/fastqc \
-  -t "$threads" \
-  --outdir "$output_dir/qc/raw_reads" \
-  "${all_files[@]}"
+  monitor_process "Raw Read QC" \
+    "$fastqc_path/fastqc" \
+    -t "$threads" \
+    --outdir "$output_dir/qc/raw_reads" \
+    "${all_files[@]}"
 
   $multiqc_path/multiqc "$output_dir/qc/raw_reads" -o "$output_dir/qc/raw_reads"
   
@@ -202,9 +269,9 @@ if [ "$run2_trimming" = true ]; then
   #########################
   
   
-  echo -e "\n\n---------------------------"
+  echo -e "\n\n--------------------------------------------------------------"
   echo "**Step 2: Trimming adapter sequences and low quality reads"
-  echo -e "---------------------------\n\n"
+  echo -e "--------------------------------------------------------------\n\n"
   
   echo "Using adapter sequences in $bbduk_adapters"
   echo "Using following parameters for trimming (can be changed in config file):"
@@ -228,25 +295,26 @@ if [ "$run2_trimming" = true ]; then
     echo "Forward read: $fwd"
     echo "Reverse read: $rev"
     
-    $bbamp_path/bbduk.sh -Xmx20g \
-      t=$threads \
-      ref=$bbduk_adapters \
-      in1=$fwd \
-      in2=$rev \
-      out1="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz" \
-      out2="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz" \
-      outm1="$output_dir/intermediate_files/${sample}_R1_trim_fail.fastq.gz" \
-      outm2="$output_dir/intermediate_files/${sample}_R2_trim_fail.fastq.gz" \
-      outs="$output_dir/intermediate_files/${sample}_pass_singletons.fastq.gz" \
-      ktrim=$bbduk_ktrim \
-      k=$bbduk_k \
-      mink=$bbduk_mink \
-      hdist=$bbduk_hdist \
-      qtrim=$bbduk_qtrim \
-      trimq=$bbduk_trimq \
-      minlen=$bbduk_minlen \
-      tpe tbo
-      #tpe trims both paired reads to same length, tbo trims overlapping reads
+    monitor_process "Sequence Trimming" \
+      "$bbamp_path/bbduk.sh" -Xmx5g \
+        t=$threads \
+        ref=$bbduk_adapters \
+        in1=$fwd \
+        in2=$rev \
+        out1="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz" \
+        out2="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz" \
+        outm1="$output_dir/intermediate_files/${sample}_R1_trim_fail.fastq.gz" \
+        outm2="$output_dir/intermediate_files/${sample}_R2_trim_fail.fastq.gz" \
+        outs="$output_dir/intermediate_files/${sample}_pass_singletons.fastq.gz" \
+        ktrim=$bbduk_ktrim \
+        k=$bbduk_k \
+        mink=$bbduk_mink \
+        hdist=$bbduk_hdist \
+        qtrim=$bbduk_qtrim \
+        trimq=$bbduk_trimq \
+        minlen=$bbduk_minlen \
+        tpe tbo
+        #tpe trims both paired reads to same length, tbo trims overlapping reads
   
   done
   
@@ -263,19 +331,20 @@ if [ "$run3_trimqc" = true ]; then
   ##################################
   
   
-  echo -e "\n\n---------------------------"
+  echo -e "\n\n---------------------------------"
   echo "**Step 3: Trimmed read QC checking"
-  echo -e "---------------------------\n\n"
+  echo -e "---------------------------------\n\n"
   
   mkdir -p "$output_dir/qc/trimmed_reads"
   
   # collect all the trimmed FASTQ paths into an array
   trimmed_files=( "$output_dir"/intermediate_files/*_trim.fastq.gz )
   
-  "$fastqc_path/fastqc" \
-    -t "$threads" \
-    --outdir "$output_dir/qc/trimmed_reads" \
-    "${trimmed_files[@]}"
+  monitor_process "Trimmed Read QC" \
+    "$fastqc_path/fastqc" \
+      -t "$threads" \
+      --outdir "$output_dir/qc/trimmed_reads" \
+      "${trimmed_files[@]}"
   
   #multiqc
   
@@ -293,7 +362,43 @@ fi
 
 #-------------------------------------------
 
+if [ "$run4o1_alignment_generate_ref" = true ]; then
 
+  #############################################
+  # Step 4(optional): Generate STAR Reference #
+  #############################################
+  
+  if [ "$interactive" = true ]; then
+  
+    if [ -d "$STAR_index_dir" ]; then
+      echo
+      echo "You have chosen to create a STAR genome index, but the STAR index"
+      echo "directory already exists"
+      confirm_continue "Do you want to continue?"
+    fi
+    
+  fi
+  
+  echo -e "\n\n----------------------------------------------------"
+  echo "**Step 4 (Optional Step 1): STAR Index Generation"
+  echo -e "----------------------------------------------------\n\n"
+  
+  
+  mkdir -p "$STAR_index_dir"
+  
+  monitor_process "Generate STAR Index" \
+    "$STAR_path/STAR" --runMode genomeGenerate \
+      --genomeFastaFiles "$ref_fasta" \
+      --sjdbGTFfile "$ref_gtf" \
+      --genomeDir "$STAR_index_dir" \
+      --runThreadN $threads \
+      --sjdbOverhang $((read_lengths-1))
+  
+  echo "STAR index has been generated in $STAR_index_dir"
+  
+fi
+
+#-------------------------------------------
 
 if [ "$run4_alignment" = true ]; then
 
@@ -306,6 +411,38 @@ if [ "$run4_alignment" = true ]; then
   echo "**Step 4: Sequence Alignment"
   echo -e "---------------------------\n\n"
   
+  echo "Using STAR index in $STAR_index_dir"
+  echo "Using following parameters for STAR alignment (can be changed in config file):"
+  echo "sjdbOverhang=$((read_lengths-1))"
+  echo "alignSJDBoverhangMin=$STAR_alignSJDBoverhangMin"
+  echo "outFilterMultimapNmax=$STAR_outFilterMultimapNmax"
+  echo "genomeSAindexNbases=$STAR_genomeSAindexNbases"
+
+	
+	for sample in "${!r1_files[@]}"; do
+	
+	  fwd="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz"
+    rev="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz"
+	
+  	monitor_process "Read Alignment" \
+      "$STAR_path/STAR" --genomeDir "$STAR_index_dir" \
+        --readFilesIn "$fwd" "$rev" \
+        --runThreadN $threads \
+        --outSAMattrRGline ID:"$sample" SM:"$sample"_l1 PL:ILLUMINA \
+        --sjdbOverhang $((read_lengths-1)) \
+        --alignSJDBoverhangMin $STAR_alignSJDBoverhangMin \
+        --outFilterMultimapNmax $STAR_outFilterMultimapNmax \
+        --readFilesCommand zcat \
+        --outFileNamePrefix "$output_dir/intermediate_files/${sample}_" \
+        --outSAMtype BAM Unsorted \
+        --quantMode TranscriptomeSAM \
+        --outMultimapperOrder Random \
+        --genomeSAindexNbases $STAR_genomeSAindexNbases
+  done
+	# sort bam by read name for featurecounts
   
+  
+  
+  echo "Alignment files are available in $output_dir/intermediate_files/"
   
 fi
