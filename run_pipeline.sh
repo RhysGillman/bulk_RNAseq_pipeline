@@ -153,7 +153,6 @@ monitor_process() {
 
   # pull out relevant fields and tee them
   grep -E 'Command being timed:|User time \(seconds\):|System time \(seconds\):|Percent of CPU this job got:|Elapsed \(wall clock\) time|Maximum resident set size \(kbytes\):|File system inputs:|File system outputs:' \
-  "$_time_log" \
     "$_time_log" \
     | tee -a "$RESOURCE_LOG" \
     || true
@@ -239,7 +238,6 @@ if [ "$run1_rawqc" = true ]; then
   echo -e "-------------------------------\n\n"
   
   mkdir -p "$output_dir/qc/raw_reads"
-  mkdir -p "$output_dir/logs/fastqc"
   
   # run fastqc on all samples in parallel
   monitor_process "Raw Read QC" \
@@ -384,17 +382,17 @@ if [ "$run4o1_alignment_generate_ref" = true ]; then
   echo -e "----------------------------------------------------\n\n"
   
   
-  mkdir -p "$STAR_index_dir"
+  mkdir -p "$STAR_index_dir/${read_lengths}bp"
   
   monitor_process "Generate STAR Index" \
     "$STAR_path/STAR" --runMode genomeGenerate \
       --genomeFastaFiles "$ref_fasta" \
       --sjdbGTFfile "$ref_gtf" \
-      --genomeDir "$STAR_index_dir" \
+      --genomeDir "$STAR_index_dir/${read_lengths}bp" \
       --runThreadN $threads \
       --sjdbOverhang $((read_lengths-1))
   
-  echo "STAR index has been generated in $STAR_index_dir"
+  echo "STAR index has been generated in $STAR_index_dir/${read_lengths}bp"
   
 fi
 
@@ -411,21 +409,27 @@ if [ "$run4_alignment" = true ]; then
   echo "**Step 4: Sequence Alignment"
   echo -e "---------------------------\n\n"
   
-  echo "Using STAR index in $STAR_index_dir"
+  echo "Using STAR index in $STAR_index_dir/${read_lengths}bp"
   echo "Using following parameters for STAR alignment (can be changed in config file):"
   echo "sjdbOverhang=$((read_lengths-1))"
   echo "alignSJDBoverhangMin=$STAR_alignSJDBoverhangMin"
   echo "outFilterMultimapNmax=$STAR_outFilterMultimapNmax"
   echo "genomeSAindexNbases=$STAR_genomeSAindexNbases"
+  echo -e "\n\n"
 
 	
 	for sample in "${!r1_files[@]}"; do
 	
 	  fwd="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz"
     rev="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz"
-	
+	  
+	  echo "Beginning alignment for ${sample} using:"
+	  echo "$fwd"
+	  echo "$rev"
+	  echo -e "\n\n"
+	  
   	monitor_process "Read Alignment" \
-      "$STAR_path/STAR" --genomeDir "$STAR_index_dir" \
+      "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" \
         --readFilesIn "$fwd" "$rev" \
         --runThreadN $threads \
         --outSAMattrRGline ID:"$sample" SM:"$sample"_l1 PL:ILLUMINA \
@@ -438,7 +442,16 @@ if [ "$run4_alignment" = true ]; then
         --quantMode TranscriptomeSAM \
         --outMultimapperOrder Random \
         --genomeSAindexNbases $STAR_genomeSAindexNbases
+    
+    echo -e "Completed STAR Alignment, basic info below, more in $output_dir/intermediate_files/${sample}_Log.final.out\n"    
+    # print important log information
+    grep -E "Uniquely mapped reads|reads mapped to multiple loci|reads unmapped" "$output_dir/intermediate_files/${sample}_Log.final.out"
+      
   done
+  
+  
+  
+  
 	# sort bam by read name for featurecounts
   
   
@@ -446,3 +459,121 @@ if [ "$run4_alignment" = true ]; then
   echo "Alignment files are available in $output_dir/intermediate_files/"
   
 fi
+
+#-------------------------------------------
+
+if [ "$run5_alignqc" = true ]; then
+
+  #############################################
+  # Step 4(optional): Generate STAR Reference #
+  #############################################
+  
+  
+  echo -e "\n\n---------------------------"
+  echo "**Step 5: Alignment QC checking"
+  echo -e "---------------------------\n\n"
+ 
+  mkdir -p "$output_dir/qc/alignment/"
+  
+  multiqc -o "$output_dir/qc/alignment/" $output_dir/intermediate_files/
+  
+  if [ "$interactive" = true ]; then
+    echo
+    echo "You have selected interactive mode, waiting for confirmation to continue..."
+    confirm_continue "Do you want to continue?"
+  fi
+  
+  
+fi
+
+
+#-------------------------------------------
+
+if [ "$run6o1_rsem_generate_ref" = true ]; then
+
+  #############################################
+  # Step 6(optional): Generate RSEM Reference #
+  #############################################
+  
+  #if [ -d "$RSEM_index_dir" ]; then
+  #    echo
+  #    echo "You have chosen to create RSEM reference files, but the directory"
+  #    echo "$RSEM_index_dir already exists"
+  #    confirm_continue "Do you want to continue?"
+  #fi
+  
+  echo -e "\n\n----------------------------------------------------"
+  echo "**Step 6 (Optional Step 1): RSEM Index Generation"
+  echo -e "----------------------------------------------------\n\n"
+  
+  mkdir -p "$RSEM_index_dir"
+
+  "$rsem_path/rsem-prepare-reference" \
+  	--gtf "$ref_gtf" \
+  	"$ref_fasta" \
+  	"$RSEM_index_dir"
+  
+  echo "Finished generating RSEM reference in $RSEM_index_dir"
+  
+fi
+
+#-------------------------------------------
+
+if [ "$run6_quant" = true ]; then
+
+  ##########################
+  # Step 6: Quantify Reads #
+  ##########################
+  
+  echo -e "\n\n---------------------------"
+  echo "**Step 6: Quantify Reads"
+  echo -e "---------------------------\n\n"
+  
+  
+  if [ "$stranded_reads" = "auto" ]; then
+    echo "Auto-detecting strandedness..."
+    source "$RSeQC_path/bin/activate"
+    
+    keys=( "${!r1_files[@]}" )
+    first_sample="${keys[0]}"
+    first_sample_bam="$output_dir/intermediate_files/${first_sample}_Aligned.out.bam"
+    s=$(./scripts/guess_strandedness.sh "$first_sample_bam" "$ref_exon_bed")
+    echo "Detected strandedness as:"
+    deactivate
+  else
+    s=$stranded_reads
+  fi
+  
+  case "$s" in
+    unstranded)         rsem_s="none"    ;;
+    forward-stranded)   rsem_s="forward" ;;
+    reverse-stranded)   rsem_s="reverse" ;;
+    *) 
+      echo "Warning: unknown strandedness '$s', defaulting to unstranded" >&2
+      rsem_s="none"
+      ;;
+  esac
+  
+  for sample in "${!r1_files[@]}"; do
+    echo -e "\nQuantifying reads for sample: $sample\n"
+
+    monitor_process "RSEM Quantification" \
+      "$rsem_path/rsem-calculate-expression" \
+        -p "$threads" \
+        --paired-end \
+        --alignments \
+        --strandedness "$rsem_s" \
+        --no-bam-output \
+        "$output_dir/intermediate_files/${sample}_Aligned.toTranscriptome.out.bam" \
+        "$RSEM_index_dir" \
+        "$output_dir/intermediate_files/${sample}"
+  done
+  
+  
+  echo "RSEM results files are available in $output_dir/intermediate_files/"
+  
+fi
+
+
+
+
