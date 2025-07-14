@@ -133,41 +133,30 @@ echo -e "\n\n"
 
 monitor_process() {
   local process_name="$1"; shift
-  echo "===== $process_name START: $(date '+%F %T') =====" | tee -a "$RESOURCE_LOG"
-
-  #/usr/bin/time -v -o "$RESOURCE_LOG" --append "$@" 
-  #{ /usr/bin/time -v "$@" ; } 2>&1 | tee -a "$RESOURCE_LOG"
+  echo "===== $process_name START: $(date '+%F %T') =====" >> "$RESOURCE_LOG"
   
   # uses the time function to capture resource utilisation information
   # output is teed to both stdout and and the log file
   # grep filtered to only key information
   
   # create a tmp file for logging
-  local _time_log
-  _time_log=$(mktemp)
+  tmp_time=$(mktemp)
 
   # run the command under time function, send the command's stdout+stderr to the main log
-  # capture only the time -v verbose stats into tmp $_time_log via -o
-  /usr/bin/time -v -o "$_time_log" --append "$@" 2>&1 \
-    | tee -a "$RESOURCE_LOG"
+  # capture only the time -v verbose stats into tmp $tmp_time via -o
+  /usr/bin/time -v -o "$tmp_time" --append "$@"  > /dev/null 2>&1 || true
 
-  # pull out relevant fields and tee them
-  grep -E 'Command being timed:|User time \(seconds\):|System time \(seconds\):|Percent of CPU this job got:|Elapsed \(wall clock\) time|Maximum resident set size \(kbytes\):|File system inputs:|File system outputs:' \
-    "$_time_log" \
-    | tee -a "$RESOURCE_LOG" \
+  # pull out relevant fields
+  grep -E \
+    'Command being timed:|User time \(seconds\):|System time \(seconds\):|Percent of CPU this job got:|Elapsed \(wall clock\) time|Maximum resident set size \(kbytes\):|File system inputs:|File system outputs:' \
+    "$tmp_time" \
+    >> "$RESOURCE_LOG" \
     || true
+  
   # remove tmp log file
-  rm "$_time_log"
+  rm "$tmp_time"
   
-  
-  
-  #{
-  #  /usr/bin/time -v "$@" 2>&1 \
-  #    | grep -E '^( *Command being timed:| *User time| *System time| *Percent of CPU| *Elapsed| *Maximum resident set size| *File system inputs| *File system outputs)' \
-  #    || true
-  #} | tee -a "$RESOURCE_LOG"
-
-  echo "===== $process_name END:   $(date '+%F %T') =====" | tee -a "$RESOURCE_LOG"
+  echo "===== $process_name END:   $(date '+%F %T') =====" >> "$RESOURCE_LOG"
 }
 
 
@@ -509,6 +498,7 @@ if [ "$run6o1_rsem_generate_ref" = true ]; then
   mkdir -p "$RSEM_index_dir"
 
   "$rsem_path/rsem-prepare-reference" \
+    --quiet \
   	--gtf "$ref_gtf" \
   	"$ref_fasta" \
   	"$RSEM_index_dir"
@@ -561,6 +551,7 @@ if [ "$run6_quant" = true ]; then
       "$rsem_path/rsem-calculate-expression" \
         -p "$threads" \
         --paired-end \
+        --quiet \
         --alignments \
         --strandedness "$rsem_s" \
         --no-bam-output \
@@ -571,6 +562,28 @@ if [ "$run6_quant" = true ]; then
   
   
   echo "RSEM results files are available in $output_dir/intermediate_files/"
+  
+fi
+
+
+#-------------------------------------------
+
+if [ "$run7_consensusDE" = true ]; then
+
+  #######################
+  # Step 7: ConsensusDE #
+  #######################
+  
+  echo -e "\n\n----------------------------------------"
+  echo "**Step 7: Find DEGs using ConsensusDE"
+  echo -e "----------------------------------------\n\n"
+  
+  echo "Summarising isoform-level counts to gene-level counts"
+  
+  Rscript --no-save --no-restore "scripts/summarise_gene_counts.R" -i $output_dir -o "$output_dir/intermediate_files"
+  
+  
+  
   
 fi
 
