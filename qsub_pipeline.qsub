@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -P pq84
 #PBS -q normalbw
-#PBS -l walltime=10:00:00,mem=50GB,jobfs=5GB,ncpus=12
+#PBS -l walltime=18:00:00,mem=64GB,jobfs=5GB,ncpus=24
 #PBS -l storage=gdata/u86+scratch/u86+gdata/pq84+scratch/pq84
 #PBS -j oe
 #PBS -m abe
