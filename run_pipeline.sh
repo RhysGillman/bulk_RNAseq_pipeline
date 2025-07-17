@@ -274,39 +274,58 @@ if [ "$run2_trimming" = true ]; then
   
   mkdir -p "$output_dir/intermediate_files"
   
-  for sample in "${!r1_files[@]}"; do
   
-    fwd="${r1_files[$sample]}"
-    rev="${r2_files[$sample]}"
+  # determine how many jobs to run in parallel, based on $threads
+  MIN_THREADS_PER_JOB=$bbduk_threads_per_job
+  if [ "$threads" -lt "$MIN_THREADS_PER_JOB" ]; then
+    bbduk_jobs=1
+    threads_per_job=$threads
+  else
+    bbduk_jobs=$(( threads / MIN_THREADS_PER_JOB ))
+    threads_per_job=$MIN_THREADS_PER_JOB
+  fi
+  echo "Running up to $bbduk_jobs bbduk jobs in parallel, each with $threads_per_job threads."
   
-    echo "Trimming adapters in sample: $sample"
-    echo "Forward read: $fwd"
-    echo "Reverse read: $rev"
+  
+  # loop over samples and launch bbduk in background, throttled to $bbduk_jobs
+    for sample in "${!r1_files[@]}"; do
+      fwd="${r1_files[$sample]}"
+      rev="${r2_files[$sample]}"
+  
+      echo "Trimming adapters in sample: $sample"
+      echo "Forward read: $fwd"
+      echo "Reverse read: $rev"
+      (
+        monitor_process "Sequence Trimming" \
+        "$bbmap_path/bbduk.sh" -Xmx5g \
+          t=$threads_per_job \
+          ref=$bbduk_adapters \
+          in1="$fwd" \
+          in2="$rev" \
+          out1="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz" \
+          out2="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz" \
+          outm1="$output_dir/intermediate_files/${sample}_R1_trim_fail.fastq.gz" \
+          outm2="$output_dir/intermediate_files/${sample}_R2_trim_fail.fastq.gz" \
+          outs="$output_dir/intermediate_files/${sample}_pass_singletons.fastq.gz" \
+          ktrim=$bbduk_ktrim \
+          k=$bbduk_k \
+          mink=$bbduk_mink \
+          hdist=$bbduk_hdist \
+          qtrim=$bbduk_qtrim \
+          trimq=$bbduk_trimq \
+          minlen=$bbduk_minlen \
+          tpe tbo
+          #tpe trims both paired reads to same length, tbo trims overlapping reads
+      ) &
+      # throttle: wait if too many bbduk jobs are running
+      while [ "$(jobs -rp | wc -l)" -ge "$bbduk_jobs" ]; do
+        sleep 5
+      done
+    done
+  
+    wait  # ensure all background bbsuk jobs finish before proceeding
     
-    monitor_process "Sequence Trimming" \
-      "$bbmap_path/bbduk.sh" -Xmx5g \
-        t=$threads \
-        ref=$bbduk_adapters \
-        in1=$fwd \
-        in2=$rev \
-        out1="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz" \
-        out2="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz" \
-        outm1="$output_dir/intermediate_files/${sample}_R1_trim_fail.fastq.gz" \
-        outm2="$output_dir/intermediate_files/${sample}_R2_trim_fail.fastq.gz" \
-        outs="$output_dir/intermediate_files/${sample}_pass_singletons.fastq.gz" \
-        ktrim=$bbduk_ktrim \
-        k=$bbduk_k \
-        mink=$bbduk_mink \
-        hdist=$bbduk_hdist \
-        qtrim=$bbduk_qtrim \
-        trimq=$bbduk_trimq \
-        minlen=$bbduk_minlen \
-        tpe tbo
-        #tpe trims both paired reads to same length, tbo trims overlapping reads
-  
-  done
-  
-  echo "Trimmed fastq files are in $output_dir/intermediate_files"
+    echo "Trimmed fastq files are in $output_dir/intermediate_files"
 
 fi
 
@@ -418,6 +437,26 @@ if [ "$run4_alignment" = true ]; then
     threads_per_job=$MIN_THREADS_PER_JOB
   fi
   echo "Running up to $STAR_jobs STAR jobs in parallel, each with $threads_per_job threads."
+  
+  # Clean up any previous shared genome index, get rid of output saying "FATAL ERROR"
+  "$STAR_path/STAR" \
+    --genomeDir "$STAR_index_dir/${read_lengths}bp" \
+    --genomeLoad Remove \
+    > /dev/null 2>&1 || true
+
+  # Preload genome into shared memory
+  echo "Preloading STAR genome into shared memory..."
+  "$STAR_path/STAR" \
+    --genomeDir "$STAR_index_dir/${read_lengths}bp" \
+    --genomeLoad LoadAndExit
+    
+  # Safety: wait a moment to allow OS to finalize shared segment
+  sleep 5
+    
+  # Trap for cleanup on exit
+  trap 'echo "Cleaning up STAR shared genome memory..."; \
+        "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" --genomeLoad Remove' EXIT
+
 
   # loop over samples and launch STAR in background, throttled to $star_jobs
   for sample in "${!r1_files[@]}"; do
@@ -431,8 +470,10 @@ if [ "$run4_alignment" = true ]; then
     (
   	monitor_process "Read Alignment" \
       "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" \
+        --genomeLoad LoadAndKeep \
         --readFilesIn "$fwd" "$rev" \
         --runThreadN $threads_per_job \
+        --limitBAMsortRAM 10000000000 \
         --outSAMattrRGline ID:"$sample" SM:"$sample"_l1 PL:ILLUMINA \
         --sjdbOverhang $((read_lengths-1)) \
         --alignSJDBoverhangMin $STAR_alignSJDBoverhangMin \
@@ -453,13 +494,18 @@ if [ "$run4_alignment" = true ]; then
       sleep 5
     done
     
-    
+    # Delay after each launch to stagger memory load
+    sleep 10
     
   done
 
   wait  # ensure all background jobs finish before proceeding
   
   echo "Alignment files are available in $output_dir/intermediate_files/"
+  
+  # make sure genome is unloaded
+  "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" --genomeLoad Remove
+
 
 	for sample in "${!r1_files[@]}"; do
     samtools index "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
@@ -556,99 +602,102 @@ if [ "$run6_quant" = true ]; then
     s=$stranded_reads
   fi
   
-  case "$s" in
-    unstranded)         rsem_s="none"    ;;
-    forward-stranded)   rsem_s="forward" ;;
-    reverse-stranded)   rsem_s="reverse" ;;
-    *) 
-      echo "Warning: unknown strandedness '$s', defaulting to unstranded" >&2
-      rsem_s="none"
-      ;;
-  esac
-
   # determine how many RSEM jobs to run in parallel, based on $threads
-  MIN_THREADS_PER_JOB=$RSEM_threads_per_job
+  MIN_THREADS_PER_JOB=$quant_threads_per_job
   if [ "$threads" -lt "$MIN_THREADS_PER_JOB" ]; then
-    rsem_jobs=1
+    quant_jobs=1
     threads_per_job=$threads
   else
-    rsem_jobs=$(( threads / MIN_THREADS_PER_JOB ))
+    quant_jobs=$(( threads / MIN_THREADS_PER_JOB ))
     threads_per_job=$MIN_THREADS_PER_JOB
   fi
-  echo "Running up to $rsem_jobs RSEM jobs in parallel, each with $threads_per_job threads."
-
-  # loop over samples and launch RSEM in background, throttled to $rsem_jobs
-  for sample in "${!r1_files[@]}"; do
-    echo -e "\nQuantifying reads for sample: $sample using RSEM\n"
-    (
-      monitor_process "RSEM Quantification: $sample" \
-        "$rsem_path/rsem-calculate-expression" \
-          -p "$threads_per_job" \
-          --paired-end \
-          --quiet \
-          --alignments \
-          --strandedness "$rsem_s" \
-          --no-bam-output \
-          "$output_dir/intermediate_files/${sample}_Aligned.toTranscriptome.out.bam" \
-          "$RSEM_index_dir" \
-          "$output_dir/intermediate_files/${sample}"
-      
-      echo -e "Completed RSEM for sample: $sample"
-      
-    ) &
-    # throttle: wait if too many RSEM jobs are running
-    while [ "$(jobs -rp | wc -l)" -ge "$rsem_jobs" ]; do
-      sleep 5
-    done
-  done
-
-  wait  # ensure all background RSEM jobs finish before proceeding
-  
-  echo "RSEM results files are available in $output_dir/intermediate_files/"
   
   
-  case "$s" in
-    unstranded)         featurecounts_s=0 ;;
-    forward-stranded)   featurecounts_s=1 ;;
-    reverse-stranded)   featurecounts_s=2 ;;
-    *) 
-      echo "Warning: unknown strandedness '$s', defaulting to unstranded" >&2
-      rsem_s="none"
-      ;;
-  esac
+  if [ "$quantification" = "RSEM" ]; then
   
-  for sample in "${!r1_files[@]}"; do
-    echo -e "\nQuantifying reads for sample: $sample using featureCounts\n"
-    (
-      monitor_process "FeatureCounts Quantification: $sample" \
-          "$subread_path/featureCounts" \
-          -p \
-          -T "$threads_per_job" \
-          -s $featurecounts_s \
-          -t exon \
-          -g gene_id \
-          -a "$ref_gtf" \
-          -o "$output_dir/intermediate_files/${sample}_featureCounts.output" \
-          "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
-      echo -e "Completed featureCounts for sample: $sample"
-    ) &
+    case "$s" in
+      unstranded)         rsem_s="none"    ;;
+      forward-stranded)   rsem_s="forward" ;;
+      reverse-stranded)   rsem_s="reverse" ;;
+      *) 
+        echo "Warning: unknown strandedness '$s', defaulting to unstranded" >&2
+        rsem_s="none"
+        ;;
+    esac
+  
     
-    
-    # throttle: wait if too many featurecounts jobs are running
-    while [ "$(jobs -rp | wc -l)" -ge "$rsem_jobs" ]; do
-      sleep 5
+    echo "Running up to $quant_jobs RSEM jobs in parallel, each with $threads_per_job threads."
+  
+    # loop over samples and launch RSEM in background, throttled to $quant_jobs
+    for sample in "${!r1_files[@]}"; do
+      echo -e "\nQuantifying reads for sample: $sample using RSEM\n"
+      (
+        monitor_process "RSEM Quantification: $sample" \
+          "$rsem_path/rsem-calculate-expression" \
+            -p "$threads_per_job" \
+            --paired-end \
+            --quiet \
+            --alignments \
+            --strandedness "$rsem_s" \
+            --no-bam-output \
+            "$output_dir/intermediate_files/${sample}_Aligned.toTranscriptome.out.bam" \
+            "$RSEM_index_dir" \
+            "$output_dir/intermediate_files/${sample}"
+        
+        echo -e "Completed RSEM for sample: $sample"
+        
+      ) &
+      # throttle: wait if too many RSEM jobs are running
+      while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
+        sleep 5
+      done
     done
-  done
-
-  wait  # ensure all background featurecounts jobs finish before proceeding
   
-  echo "featureCounts results files are available in $output_dir/intermediate_files/"
+    wait  # ensure all background RSEM jobs finish before proceeding
+    
+    echo "RSEM results files are available in $output_dir/intermediate_files/"
+  fi
   
+  if [ "$quantification" = "featureCounts" ]; then
+    case "$s" in
+      unstranded)         featurecounts_s=0 ;;
+      forward-stranded)   featurecounts_s=1 ;;
+      reverse-stranded)   featurecounts_s=2 ;;
+      *) 
+        echo "Warning: unknown strandedness '$s', defaulting to unstranded" >&2
+        rsem_s="none"
+        ;;
+    esac
+    
+    echo "Running up to $quant_jobs featureCounts jobs in parallel, each with $threads_per_job threads."
+    
+    for sample in "${!r1_files[@]}"; do
+      echo -e "\nQuantifying reads for sample: $sample using featureCounts\n"
+      (
+        monitor_process "FeatureCounts Quantification: $sample" \
+            "$subread_path/featureCounts" \
+            -p \
+            -T "$threads_per_job" \
+            -s $featurecounts_s \
+            -t exon \
+            -g gene_id \
+            -a "$ref_gtf" \
+            -o "$output_dir/intermediate_files/${sample}_featureCounts.output" \
+            "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
+        echo -e "Completed featureCounts for sample: $sample"
+      ) &
+      
+      
+      # throttle: wait if too many featurecounts jobs are running
+      while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
+        sleep 5
+      done
+    done
   
-  for sample in "${!r1_files[@]}"; do
-    awk 'NR>2 {print $1, $NF}' "$output_dir/intermediate_files/${sample}_featureCounts.output" > "$output_dir/intermediate_files/${sample}_featureCounts.txt"
-  done
-  
+    wait  # ensure all background featurecounts jobs finish before proceeding
+    
+    echo "featureCounts results files are available in $output_dir/intermediate_files/"
+  fi
   
   
 fi
@@ -665,11 +714,18 @@ if [ "$run7_consensusDE" = true ]; then
   echo "**Step 7: Find DEGs using ConsensusDE"
   echo -e "----------------------------------------\n\n"
   
-  echo "Summarising isoform-level counts to gene-level counts"
+  # prepare input count files
+  if [ "$quantification" = "RSEM" ]; then
+    echo "Summarising isoform-level counts to gene-level counts"
+    mkdir -p "$output_dir/consensusDE/input"
+    Rscript --no-save --no-restore "scripts/summarise_gene_counts.R" -i "$output_dir/intermediate_files" -o "$output_dir/consensusDE/input"
+  fi
   
-  mkdir -p "$output_dir/consensusDE/input"
-  
-  Rscript --no-save --no-restore "scripts/summarise_gene_counts.R" -i "$output_dir/intermediate_files" -o "$output_dir/consensusDE/input"
+  if [ "$quantification" = "featureCounts" ]; then
+    for sample in "${!r1_files[@]}"; do
+      awk 'NR>2 {print $1, $NF}' "$output_dir/intermediate_files/${sample}_featureCounts.output" > "$output_dir/consensusDE/input/${sample}_summarised_counts.txt"
+    done
+  fi
   
   
   
