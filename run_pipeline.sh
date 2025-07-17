@@ -34,31 +34,56 @@ confirm_continue() {
 }
 
 usage() {
-  echo "Usage: $0 -c <config_file>" >&2
+  cat <<EOF >&2
+Usage: $0 [OPTIONS]
+
+  -c, --config       Path to config file (default: setup.cfg)
+      --interactive  true|false    Override interactive mode
+      --threads      N            Override number of threads
+      --metadata     FILE         Override metadata.tsv path
+      --input-dir    DIR          Override input directory
+      --output-dir   DIR          Override output directory
+      --read-lengths N            Override read length
+      --steps        1,2,3...     Comma-separated list of steps to run
+EOF
   exit 1
 }
 
 ############################
 # Handling input arguments #
 ############################
+# CLI overrides (empty unless user sets them)
+cli_interactive=
+cli_threads=
+cli_metadata=
+cli_input_dir=
+cli_output_dir=
+cli_read_lengths=
+cli_steps=
 
 # Default values
 config_file="setup.cfg"
 
 # getopt setup
-TEMP=$(getopt -o c: --long config: -n 'run_pipeline.sh' -- "$@") || usage
-
+TEMP=$(getopt -o c: \
+  --long config:,interactive:,threads:,metadata:,input-dir:,output-dir:,read-lengths:,steps: \
+  -n 'run_pipeline.sh' -- "$@") || usage
 eval set -- "$TEMP"
 
 while true; do
   case "$1" in
-    -c|--config)
-      config_file="$2"; shift 2;;
-    --) shift; break;;
-    *) usage;;
+    -c|--config)     config_file="$2";      shift 2 ;;
+    --interactive)   cli_interactive="$2";  shift 2 ;;
+    --threads)       cli_threads="$2";      shift 2 ;;
+    --metadata)      cli_metadata="$2";     shift 2 ;;
+    --input-dir)     cli_input_dir="$2";    shift 2 ;;
+    --output-dir)    cli_output_dir="$2";   shift 2 ;;
+    --read-lengths)  cli_read_lengths="$2"; shift 2 ;;
+    --steps)         cli_steps="$2";        shift 2 ;;
+    --)              shift; break ;;
+    *)               usage ;;
   esac
 done
-
 ####################
 # Read Config File #
 ####################
@@ -76,6 +101,45 @@ source "$config_file"
 
 # Default fallbacks
 : "${threads:=4}"
+
+# Override config with CLI if provided
+if [ -n "$cli_interactive" ]; then interactive=$cli_interactive; fi
+if [ -n "$cli_threads" ];     then threads=$cli_threads;         fi
+if [ -n "$cli_metadata" ];    then metadata=$cli_metadata;       fi
+if [ -n "$cli_input_dir" ];   then input_dir=$cli_input_dir;     fi
+if [ -n "$cli_output_dir" ];  then output_dir=$cli_output_dir;   fi
+if [ -n "$cli_read_lengths" ];then read_lengths=$cli_read_lengths;fi
+
+
+# Handling CLI selected steps to run
+
+if [ -n "$cli_steps" ]; then
+  # First, turn *all* main steps off
+  run1_rawqc=false
+  run2_trimming=false
+  run3_trimqc=false
+  run4_alignment=false
+  run5_alignqc=false
+  run6_quant=false
+  run7_consensusDE=false
+
+  # Parse comma-separated list
+  IFS=',' read -ra STEP_ARR <<< "$cli_steps"
+  for st in "${STEP_ARR[@]}"; do
+    case "$st" in
+      1) run1_rawqc=true                              ;;
+      2) run2_trimming=true                           ;;
+      3) run3_trimqc=true                             ;;
+      4) run4_alignment=true                          ;;
+      4o1) run4o1_alignment_generate_ref=true         ;;
+      5) run5_alignqc=true                            ;;
+      6) run6_quant=true                              ;;
+      6o1) run6o1_rsem_generate_ref=true              ;;
+      7) run7_consensusDE=true                        ;;
+      *) echo "Error: unknown step '$st'" >&2; exit 1 ;;
+    esac
+  done
+fi
 
 if [[ -z "$output_dir" ]]; then
   echo "Error: output_dir not set in config file" >&2
@@ -714,6 +778,8 @@ if [ "$run7_consensusDE" = true ]; then
   echo "**Step 7: Find DEGs using ConsensusDE"
   echo -e "----------------------------------------\n\n"
   
+  mkdir -p "$output_dir/consensusDE/input"
+  
   # prepare input count files
   if [ "$quantification" = "RSEM" ]; then
     echo "Summarising isoform-level counts to gene-level counts"
@@ -727,8 +793,37 @@ if [ "$run7_consensusDE" = true ]; then
     done
   fi
   
+  if [ "$stranded_reads" = "auto" ]; then
+    # skip if already ran this earlier
+    if [[ ! -v s ]]; then
+      echo "Auto-detecting strandedness..."
+      source "$RSeQC_path/bin/activate"
+      
+      keys=( "${!r1_files[@]}" )
+      first_sample="${keys[0]}"
+      first_sample_bam="$output_dir/intermediate_files/${first_sample}_Aligned.sortedByCoord.out.bam"
+      s=$(./scripts/guess_strandedness.sh "$first_sample_bam" "$ref_exon_bed")
+    fi
+    if [ -z "$s" ]; then
+      echo "Warning: strandedness auto‐detection returned empty, defaulting to unstranded" >&2
+      s="unstranded"
+    else
+      echo "Detected strandedness as: $s"
+  fi
+  deactivate
+  else
+    s="$stranded_reads"
+  fi
   
-  
+  Rscript --no-save --no-restore \
+    "scripts/consensusDE_wrapper.R" \
+    --metadata "$metadata" \
+    --input "$output_dir/consensusDE/input" \
+    --output "$output_dir/consensusDE"
+    --gtf "$ref_gtf" \
+    --paired "$paired" \
+    --strandedness "$s" \
+    --threads "$threads"
   
 fi
 
