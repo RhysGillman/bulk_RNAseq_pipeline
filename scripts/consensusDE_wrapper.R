@@ -8,15 +8,18 @@ suppressPackageStartupMessages (library(tximport, quietly = T))
 suppressPackageStartupMessages (library(data.table, quietly = T))
 suppressPackageStartupMessages (library(consensusDE, quietly = T))
 suppressPackageStartupMessages (library(org.Hs.eg.db, quietly = T))
+suppressPackageStartupMessages (library(ggfortify, quietly = T))
 
 # Handling input arguments
 option_list = list(
   make_option(c("-m", "--metadata"), type="character", default=NULL, 
               help="Path to metadata file", metavar ="MetaData"),
   make_option(c("-i", "--input"), type="character", default=NULL, 
-              help="Path to directory containing gene-level counts in .txt files", metavar ="Input Path"),
+              help="Path to directory containing gene-level counts in .txt files", metavar ="InputPath"),
   make_option(c("-o", "--output"), type="character", default=NULL, 
               help="Path to output directory for results files.", metavar ="OutputPath"),
+  make_option(c("-d", "--DEmethods"), type="character", default="deseq,edger,voom", 
+              help="Comma separated list of DE methods to run", metavar ="OutputPath"),
   make_option(c("-g", "--gtf"), type="character", default=NULL, 
               help="Path to gtf", metavar ="GTFPath"),
   make_option(c("-p", "--paired"), type="logical", default=TRUE, 
@@ -37,30 +40,16 @@ gtf_path <- opt$gtf
 is_paired <- opt$paired
 strandedness <- opt$strandedness
 threads <- opt$threads
+DE_methods <- unlist(str_split(opt$DEmethods, ","))
 
-
-# remember to remove!---------------------------------------------------------***************
-metadata_path="/g/data/pq84/rhys/git_repos/bulk_RNAseq_pipeline/test_data/MACE_metadata.tsv"
-in_path="/g/data/pq84/rhys/git_repos/bulk_RNAseq_pipeline/MACE_output/consensusDE/input"
-out_path="/g/data/pq84/rhys/git_repos/bulk_RNAseq_pipeline/MACE_output/consensusDE"
-is_paired=T
-strandedness="reverse-stranded"
-gtf_path="/g/data/pq84/rhys/resources/gtf/hg38/ensembl/Homo_sapiens.GRCh38.114.gtf"
-threads=8
-# -------------------------------------------------------------------------------*****************
+source("scripts/random_functions.R")
 
 # paths need trailing /
-trail_slash <- function(path){
-  if(str_extract(path,"(.{1})$",group = 1)!="/"){
-    return(paste0(path,"/"))
-  } else {
-    return(path)
-  }
-}
-
 in_path <- trail_slash(in_path)
 out_path <- trail_slash(out_path)
 
+message(paste0("ConsensusDE is being run using these methods: (", paste0(DE_methods, collapse = ";"),")"))
+message(paste0("Results, Plots and Logs will be stored in ", out_path ))
 
 # Create Dirs
 
@@ -72,12 +61,12 @@ metadata <- fread(metadata_path)
 
 # work out if data is paired
 
-#paired_data <- metadata %>%
-#  dplyr::select(subject_ID, condition) %>%
-#  unique()
+paired_data <- metadata %>%
+  dplyr::select(subject_ID, condition) %>%
+  unique()
 # check if the nrows of above is equal to n conditions * n subjects
-#paired_data=ifelse(nrow(paired_data)==(length(unique(paired_data$condition)))*length(unique(paired_data$subject_ID)),
-#                   "paired","unpaired")
+paired_data=ifelse(nrow(paired_data)==(length(unique(paired_data$condition)))*length(unique(paired_data$subject_ID)),
+                   "paired","unpaired")
 
 sample_table <- data.frame(file=list.files(in_path)) %>%
   mutate(sample_ID=str_extract(basename(file), "(^.*)_summarised_counts.txt$", group = 1)) %>%
@@ -127,7 +116,7 @@ if(length(unique(sample_table$batch))>1){
   
   message("Running consensusDE without RUV correction...")
   CDE_run <- multi_de_pairs(summarized = CDE_summarised_object,
-                            paired = is_paired,
+                            paired = paired_data,
                             plot_dir = paste0(out_path,"plots/"),
                             output_voom = paste0(out_path,"results/"),
                             output_edger = paste0(out_path,"results/"),
@@ -139,11 +128,11 @@ if(length(unique(sample_table$batch))>1){
 
   message("Running consensusDE with RUV correction...")
   CDE_run <- multi_de_pairs(summarized = CDE_summarised_object,
-                            paired = is_paired,
+                            paired = paired_data,
                             plot_dir = paste0(out_path,"plots/"),
-                            output_voom = paste0(out_path,"results/"),
-                            output_edger = paste0(out_path,"results/"),
-                            output_deseq = paste0(out_path,"results/"),
+                            output_voom = ifelse("voom" %in% DE_methods,paste0(out_path,"results/"),NULL),
+                            output_edger = ifelse("edger" %in% DE_methods,paste0(out_path,"results/"),NULL),
+                            output_deseq = ifelse("deseq" %in% DE_methods,paste0(out_path,"results/"),NULL),
                             output_combined = paste0(out_path,"results/"),
                             ensembl_annotate=org.Hs.eg.db,
                             ruv_correct =T)
@@ -151,3 +140,4 @@ if(length(unique(sample_table$batch))>1){
 }
 
 saveRDS(CDE_run,paste0(out_path,"CDE_run.rds"))
+

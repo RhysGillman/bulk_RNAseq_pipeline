@@ -45,6 +45,7 @@ Usage: $0 [OPTIONS]
       --output-dir   DIR          Override output directory
       --read-lengths N            Override read length
       --steps        1,2,3...     Comma-separated list of steps to run
+      --DEmethods    voom,deseq,edger Comma-separated list of DEmethods to use
 EOF
   exit 1
 }
@@ -60,13 +61,14 @@ cli_input_dir=
 cli_output_dir=
 cli_read_lengths=
 cli_steps=
+cli_DEmethods=
 
 # Default values
 config_file="setup.cfg"
 
 # getopt setup
 TEMP=$(getopt -o c: \
-  --long config:,interactive:,threads:,metadata:,input-dir:,output-dir:,read-lengths:,steps: \
+  --long config:,interactive:,threads:,metadata:,input-dir:,output-dir:,read-lengths:,steps:,DEmethods: \
   -n 'run_pipeline.sh' -- "$@") || usage
 eval set -- "$TEMP"
 
@@ -80,6 +82,7 @@ while true; do
     --output-dir)    cli_output_dir="$2";   shift 2 ;;
     --read-lengths)  cli_read_lengths="$2"; shift 2 ;;
     --steps)         cli_steps="$2";        shift 2 ;;
+    --DEmethods)     cli_DEmethods="$2";    shift 2 ;;
     --)              shift; break ;;
     *)               usage ;;
   esac
@@ -101,6 +104,7 @@ source "$config_file"
 
 # Default fallbacks
 : "${threads:=4}"
+: "${DEmethods:=deseq,edger,voom}"
 
 # Override config with CLI if provided
 if [ -n "$cli_interactive" ]; then interactive=$cli_interactive; fi
@@ -109,7 +113,7 @@ if [ -n "$cli_metadata" ];    then metadata=$cli_metadata;       fi
 if [ -n "$cli_input_dir" ];   then input_dir=$cli_input_dir;     fi
 if [ -n "$cli_output_dir" ];  then output_dir=$cli_output_dir;   fi
 if [ -n "$cli_read_lengths" ];then read_lengths=$cli_read_lengths;fi
-
+if [ -n "$cli_DEmethods"    ];then DEmethods=$cli_DEmethods;fi
 
 # Handling CLI selected steps to run
 
@@ -182,14 +186,15 @@ RESOURCE_LOG="$output_dir/logs/resource_utilisation_${timestamp}.log"
 echo -e "\n\n"
 echo "Config file read successfully"
 echo "Running the following steps of pipeline"
-echo "Raw Read QC: $run1_rawqc"
-echo "Read Trimming: $run2_trimming"
-echo "Trimmed Read QC: $run3_trimqc"
-echo "Generate Aligner Index (optional): $run4o1_alignment_generate_ref"
-echo "Alignment: $run4_alignment"
-echo "Alignment QC: $run5_alignqc"
-echo "Generate RSEM Index (Optional): $run6o1_rsem_generate_ref"
-echo "Read Quantification: $run6_quant"
+echo "1 - Raw Read QC: $run1_rawqc"
+echo "2 - Read Trimming: $run2_trimming"
+echo "3 - Trimmed Read QC: $run3_trimqc"
+echo "4o1 - Generate Aligner Index (optional): $run4o1_alignment_generate_ref"
+echo "4 - Alignment: $run4_alignment"
+echo "5 - Alignment QC: $run5_alignqc"
+echo "6o1 - Generate RSEM Index (Optional): $run6o1_rsem_generate_ref"
+echo "6 - Read Quantification: $run6_quant"
+echo "7 - ConsensusDE: $run7_consensusDE"
 echo -e "\n\n"
 
 ##################
@@ -819,11 +824,12 @@ if [ "$run7_consensusDE" = true ]; then
     "scripts/consensusDE_wrapper.R" \
     --metadata "$metadata" \
     --input "$output_dir/consensusDE/input" \
-    --output "$output_dir/consensusDE"
+    --output "$output_dir/consensusDE" \
     --gtf "$ref_gtf" \
     --paired "$paired" \
     --strandedness "$s" \
-    --threads "$threads"
+    --threads "$threads" \
+    --DEmethods "$DEmethods"
   
 fi
 
