@@ -130,9 +130,9 @@ if(length(unique(sample_table$batch))>1){
   CDE_run <- multi_de_pairs(summarized = CDE_summarised_object,
                             paired = paired_data,
                             plot_dir = paste0(out_path,"plots/"),
-                            output_voom = ifelse("voom" %in% DE_methods,paste0(out_path,"results/"),NULL),
-                            output_edger = ifelse("edger" %in% DE_methods,paste0(out_path,"results/"),NULL),
-                            output_deseq = ifelse("deseq" %in% DE_methods,paste0(out_path,"results/"),NULL),
+                            output_voom     = if ("voom"  %in% DE_methods) paste0(out_path, "results/") else NULL,
+                            output_edger    = if ("edger" %in% DE_methods) paste0(out_path, "results/") else NULL,
+                            output_deseq    = if ("deseq" %in% DE_methods) paste0(out_path, "results/") else NULL,
                             output_combined = paste0(out_path,"results/"),
                             ensembl_annotate=org.Hs.eg.db,
                             ruv_correct =T)
