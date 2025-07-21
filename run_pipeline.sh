@@ -126,6 +126,8 @@ if [ -n "$cli_steps" ]; then
   run5_alignqc=false
   run6_quant=false
   run7_consensusDE=false
+  run8_analyse_expression=false
+  run9_enrichment_analysis=false
 
   # Parse comma-separated list
   IFS=',' read -ra STEP_ARR <<< "$cli_steps"
@@ -140,6 +142,8 @@ if [ -n "$cli_steps" ]; then
       6) run6_quant=true                              ;;
       6o1) run6o1_rsem_generate_ref=true              ;;
       7) run7_consensusDE=true                        ;;
+      8) run8_analyse_expression=true                 ;;
+      9) run9_enrichment_analysis=true                ;;
       *) echo "Error: unknown step '$st'" >&2; exit 1 ;;
     esac
   done
@@ -195,6 +199,8 @@ echo "5 - Alignment QC: $run5_alignqc"
 echo "6o1 - Generate RSEM Index (Optional): $run6o1_rsem_generate_ref"
 echo "6 - Read Quantification: $run6_quant"
 echo "7 - ConsensusDE: $run7_consensusDE"
+echo "8 - Analyse Expression: $run8_analyse_expression"
+echo "9 - Enrichment Analysis: $run9_enrichment_analysis"
 echo -e "\n\n"
 
 ##################
@@ -828,11 +834,50 @@ if [ "$run7_consensusDE" = true ]; then
     --gtf "$ref_gtf" \
     --paired "$paired" \
     --strandedness "$s" \
-    --threads "$threads" \
-    --DEmethods "$DEmethods"
+    --threads "$threads"
   
 fi
 
 
+#-------------------------------------------
 
+if [ "$run8_analyse_expression" = true ]; then
 
+  ###################################
+  # Step 8: Analyse Gene Expression #
+  ###################################
+  
+  echo -e "\n\n----------------------------------"
+  echo "**Step 8: Analyse Gene Expression"
+  echo -e "----------------------------------\n\n"
+  
+  mkdir -p "$output_dir/plots"
+  mkdir -p "$output_dir/results"
+  
+  
+  Rscript --no-save --no-restore \
+    "scripts/qc_consensusDE.R" \
+    --metadata "$metadata" \
+    --input "$output_dir/consensusDE" \
+    --output "$output_dir" \
+    --DEmethods "$DEmethods" \
+    --threads "$threads" 
+  
+fi
+
+#-------------------------------------------
+
+if [ "$run9_enrichment_analysis" = true ]; then
+
+  ################################
+  # Step 9: Enrichment Analysis #
+  ###############################
+  
+  echo -e "\n\n----------------------------"
+  echo "**Step 9: Enrichment Analysis"
+  echo -e "----------------------------\n\n"
+  
+  
+
+  
+fi

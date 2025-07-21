@@ -18,8 +18,6 @@ option_list = list(
               help="Path to directory containing gene-level counts in .txt files", metavar ="InputPath"),
   make_option(c("-o", "--output"), type="character", default=NULL, 
               help="Path to output directory for results files.", metavar ="OutputPath"),
-  make_option(c("-d", "--DEmethods"), type="character", default="deseq,edger,voom", 
-              help="Comma separated list of DE methods to run", metavar ="OutputPath"),
   make_option(c("-g", "--gtf"), type="character", default=NULL, 
               help="Path to gtf", metavar ="GTFPath"),
   make_option(c("-p", "--paired"), type="logical", default=TRUE, 
@@ -40,7 +38,7 @@ gtf_path <- opt$gtf
 is_paired <- opt$paired
 strandedness <- opt$strandedness
 threads <- opt$threads
-DE_methods <- unlist(str_split(opt$DEmethods, ","))
+
 
 source("scripts/random_functions.R")
 
@@ -48,7 +46,6 @@ source("scripts/random_functions.R")
 in_path <- trail_slash(in_path)
 out_path <- trail_slash(out_path)
 
-message(paste0("ConsensusDE is being run using these methods: (", paste0(DE_methods, collapse = ";"),")"))
 message(paste0("Results, Plots and Logs will be stored in ", out_path ))
 
 # Create Dirs
@@ -90,6 +87,8 @@ CDE_summarised_object <- buildSummarized(sample_table = sample_table,
                                   n_cores=threads,
                                   force_build = TRUE)
 
+saveRDS(CDE_summarised_object,paste0(out_path,"CDE_se_raw.rds"))
+
 
 
 
@@ -114,13 +113,15 @@ if(length(unique(sample_table$batch))>1){
     metadata = metadata(CDE_summarised_object)
   )
   
+  saveRDS(CDE_summarised_object,paste0(out_path,"CDE_se_batch_corrected.rds"))
+  
   message("Running consensusDE without RUV correction...")
   CDE_run <- multi_de_pairs(summarized = CDE_summarised_object,
                             paired = paired_data,
                             plot_dir = paste0(out_path,"plots/"),
-                            output_voom = paste0(out_path,"results/"),
-                            output_edger = paste0(out_path,"results/"),
-                            output_deseq = paste0(out_path,"results/"),
+                            output_voom = paste0(out_path, "results/"),
+                            output_edger = paste0(out_path, "results/"),
+                            output_deseq = paste0(out_path, "results/"),
                             output_combined = paste0(out_path,"results/"),
                             ruv_correct = F)
   
@@ -130,9 +131,9 @@ if(length(unique(sample_table$batch))>1){
   CDE_run <- multi_de_pairs(summarized = CDE_summarised_object,
                             paired = paired_data,
                             plot_dir = paste0(out_path,"plots/"),
-                            output_voom     = if ("voom"  %in% DE_methods) paste0(out_path, "results/") else NULL,
-                            output_edger    = if ("edger" %in% DE_methods) paste0(out_path, "results/") else NULL,
-                            output_deseq    = if ("deseq" %in% DE_methods) paste0(out_path, "results/") else NULL,
+                            output_voom = paste0(out_path, "results/"),
+                            output_edger = paste0(out_path, "results/"),
+                            output_deseq = paste0(out_path, "results/"),
                             output_combined = paste0(out_path,"results/"),
                             ensembl_annotate=org.Hs.eg.db,
                             ruv_correct =T)
