@@ -1,6 +1,9 @@
 #!/bin/bash
 # run_pipeline.sh
 
+# send all messages (stderr) into the same stream as normal output
+exec 2>&1
+
 # This is the main script for running the bulk RNAseq pipeline
 # The setup.cfg and metadata.tsv files should be prepared prior to running this script
 
@@ -220,7 +223,8 @@ monitor_process() {
 
   # run the command under time function, send the command's stdout+stderr to the main log
   # capture only the time -v verbose stats into tmp $tmp_time via -o
-  /usr/bin/time -v -o "$tmp_time" --append "$@"  > /dev/null 2>&1 || true
+  #/usr/bin/time -v -o "$tmp_time" --append "$@"  > /dev/null 2>&1 || true
+  /usr/bin/time -v -o "$tmp_time" --append "$@" || true
 
   # pull out relevant fields
   grep -E \
@@ -826,15 +830,17 @@ if [ "$run7_consensusDE" = true ]; then
     s="$stranded_reads"
   fi
   
-  Rscript --no-save --no-restore \
-    "scripts/consensusDE_wrapper.R" \
-    --metadata "$metadata" \
-    --input "$output_dir/consensusDE/input" \
-    --output "$output_dir/consensusDE" \
-    --gtf "$ref_gtf" \
-    --paired "$paired" \
-    --strandedness "$s" \
-    --threads "$threads"
+  monitor_process "consensusDE" \
+    Rscript --no-save --no-restore \
+      "scripts/consensusDE_wrapper.R" \
+        --metadata "$metadata" \
+        --input "$output_dir/consensusDE/input" \
+        --output "$output_dir/consensusDE" \
+        --DEmethods "$DEmethods" \
+        --gtf "$ref_gtf" \
+        --paired "$paired" \
+        --strandedness "$s" \
+        --threads "$threads"
   
 fi
 
@@ -854,14 +860,13 @@ if [ "$run8_analyse_expression" = true ]; then
   mkdir -p "$output_dir/plots"
   mkdir -p "$output_dir/results"
   
-  
   Rscript --no-save --no-restore \
     "scripts/qc_consensusDE.R" \
-    --metadata "$metadata" \
-    --input "$output_dir/consensusDE" \
-    --output "$output_dir" \
-    --DEmethods "$DEmethods" \
-    --threads "$threads" 
+      --metadata "$metadata" \
+      --input "$output_dir/consensusDE" \
+      --output "$output_dir" \
+      --DEmethods "$DEmethods" \
+      --threads "$threads" 
   
 fi
 
@@ -877,7 +882,20 @@ if [ "$run9_enrichment_analysis" = true ]; then
   echo "**Step 9: Enrichment Analysis"
   echo -e "----------------------------\n\n"
   
+  mkdir -p "$output_dir/gsea"
   
-
-  
+  monitor_process "Enrichment Analyses (GSEA)" \
+    Rscript --no-save --no-restore \
+      "scripts/enrichment_analyses.R" \
+        --metadata "$metadata" \
+        --input "$output_dir/consensusDE" \
+        --output "$output_dir/gsea" \
+        --threads "$threads" \
+        --gene-sets "$gsea_gene_sets" \
+        --gsea-path "$gsea_path" \
+        --ref-gmt "$ref_gmt_dir" \
+        --gsea-nperm "$gsea_nperm" \
+        --gsea-set-max "$gsea_set_max" \
+        --gsea-set-min "$gsea_set_min" \
+        --log "$output_dir/gsea/gsea.log"
 fi

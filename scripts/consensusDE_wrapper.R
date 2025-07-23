@@ -18,6 +18,8 @@ option_list = list(
               help="Path to directory containing gene-level counts in .txt files", metavar ="InputPath"),
   make_option(c("-o", "--output"), type="character", default=NULL, 
               help="Path to output directory for results files.", metavar ="OutputPath"),
+  make_option(c("-d", "--DEmethods"), type="character", default="deseq,edger,voom", 
+              help="Comma separated list of DE methods to run", metavar ="OutputPath"),
   make_option(c("-g", "--gtf"), type="character", default=NULL, 
               help="Path to gtf", metavar ="GTFPath"),
   make_option(c("-p", "--paired"), type="logical", default=TRUE, 
@@ -34,6 +36,7 @@ opt = parse_args(opt_parser);
 metadata_path <- opt$metadata
 in_path <- opt$input
 out_path <- opt$output
+DE_methods <- unlist(str_split(opt$DEmethods, ","))
 gtf_path <- opt$gtf
 is_paired <- opt$paired
 strandedness <- opt$strandedness
@@ -139,6 +142,21 @@ if(length(unique(sample_table$batch))>1){
                             ruv_correct =T)
   
 }
+
+
+# modify p_intersect
+
+result_paths <- list.files(paste0(out_path,"results/"), pattern = "*combined_results.tsv", full.names = T)
+
+for(comparison in result_paths){
+  
+  merged_results <- fread(comparison) %>% as.data.frame()
+  recal_results <- recalculate_p_intersect(merged_results,DE_methods=DE_methods)
+  recal_results_path <- gsub(".tsv","_recal.tsv",comparison)
+  write_tsv(recal_results,recal_results_path)
+  
+}
+
 
 saveRDS(CDE_run,paste0(out_path,"CDE_run.rds"))
 

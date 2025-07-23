@@ -19,7 +19,7 @@ option_list = list(
   make_option(c("-m", "--metadata"), type="character", default=NULL, 
               help="Path to metadata file", metavar ="MetaData"),
   make_option(c("-i", "--input"), type="character", default=NULL, 
-              help="Path to consensusDE consensuDE directory", metavar ="InputPath"),
+              help="Path to consensusDE directory", metavar ="InputPath"),
   make_option(c("-o", "--output"), type="character", default=NULL, 
               help="Path to output directory for results files.", metavar ="OutputPath"),
   make_option(c("-d", "--DEmethods"), type="character", default="deseq,edger,voom", 
@@ -57,26 +57,11 @@ CDE_run <- readRDS(paste0(in_path, "CDE_run.rds"))
 
 # check results 
 
-result_paths <- list.files(paste0(in_path,"results/"), pattern = "*combined_results.tsv", full.names = T)
+result_paths <- list.files(paste0(in_path,"results/"), pattern = "*combined_results_recal.tsv", full.names = T)
 
 for(comparison in result_paths){
   
   merged_results <- fread(comparison) %>% as.data.frame()
-  
-  # recalculate p_intersect
-  p_intersect <- merged_results %>%
-    # get all adj_values
-    dplyr::select(ends_with("adj_p")) %>%
-    # get only the DEmethods
-    dplyr::select(starts_with(DE_methods))
-  
-  # extract max p values from selected methods
-  p_intersect <- do.call(pmax, c(p_intersect, na.rm = T))
-  
-  # replace p_intersect
-  merged_results <- merged_results %>%
-    dplyr::select(-p_intersect) %>%
-    cbind(p_intersect)
   
   # Volcano plot using p_intersect
   p1 <- generate_volcano_plot(data = merged_results,
