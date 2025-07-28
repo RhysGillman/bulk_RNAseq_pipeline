@@ -83,6 +83,7 @@ run_gsea <- function(results=NULL,
   
     gsea_cmd <- paste(
       paste0(gsea_path,"gsea-cli.sh"), "GSEAPreranked",
+      "-out", paste0(output_dir,name),
       "-gmx", gmt,
       "-norm meandiv",
       "-nperm",nperm,
@@ -95,8 +96,7 @@ run_gsea <- function(results=NULL,
       "-rnd_seed timestamp",
       "-set_max", set_max,
       "-set_min", set_min,
-      "-zip_report false",
-      "-out", paste0(output_dir,name)
+      "-zip_report false"
     )
     
     message(paste0("Running GSEA for", name, "with", gmt_name, "\n"))
@@ -287,7 +287,8 @@ create_gsea_network <- function(data, comparison_name, database_name,
   pathway_names <- plot_data$NAME
   
   # Read gene sets from GMT file
-  gmt_file <- file.path(gmt_dir, paste0(database_name, ".all.v2024.1.Mm.symbols.gmt"))
+  
+  gmt_file <- list.files(gmt_dir, pattern = paste0("^",database_name,".*symbols.gmt"))
   
   # If GMT file not found in the standard location, try to find it in GSEA results
   if (!file.exists(gmt_file) && !is.null(gsea_base_dir)) {
@@ -308,13 +309,7 @@ create_gsea_network <- function(data, comparison_name, database_name,
   
   if (!file.exists(gmt_file)) {
     message("GMT file not found: ", gmt_file)
-    # Try alternate naming conventions
-    alt_gmt_file <- file.path(gmt_dir, paste0(database_name, ".all.v2023.2.Mm.symbols.gmt"))
-    if (file.exists(alt_gmt_file)) {
-      gmt_file <- alt_gmt_file
-    } else {
       return(NULL)
-    }
   }
   
   # Parse GMT file
@@ -367,8 +362,8 @@ create_gsea_network <- function(data, comparison_name, database_name,
   
   # Create nodes data frame
   nodes <- plot_data %>%
-    select(NAME, NES, `FDR q-val`) %>%
-    rename(name = NAME) %>%
+    dplyr::select(NAME, NES, `FDR q-val`) %>%
+    dplyr::rename(name = NAME) %>%
     mutate(
       size = 5 + 3 * abs(NES),
       color = NES
@@ -411,4 +406,67 @@ create_gsea_network <- function(data, comparison_name, database_name,
   message("Saved network plot: ", output_file)
   
   return(p)
+}
+
+create_summary_heatmap <- function(data, output_file,n_shared_comparisons=2) {
+  # Get top pathways across all comparisons
+  top_pathways <- data %>%
+    filter(abs(NES) > 1.5, `FDR q-val` < 0.05) %>%
+    group_by(NAME) %>%
+    summarise(
+      mean_abs_NES = mean(abs(NES)),
+      n_significant = n()
+    ) %>%
+    filter(n_significant >= n_shared_comparisons) %>%  # Pathway significant in at least 2 comparisons
+    arrange(desc(mean_abs_NES)) %>%
+    slice_head(n = 30) %>%
+    pull(NAME)
+  
+  if (length(top_pathways) == 0) {
+    message("No pathways significant across multiple comparisons")
+    return(NULL)
+  }
+  
+  # Prepare data for heatmap
+  if(n_shared_comparisons > 1){
+    heatmap_data <- data %>%
+      filter(NAME %in% top_pathways) %>%
+      dplyr::select(NAME, comparison, NES) %>%
+      mutate(NAME = str_trunc(NAME, 40, "right")) %>%
+      pivot_wider(names_from = comparison, values_from = NES, values_fill = 0)
+  }else{
+    comp_name <- unique(data$comparison)
+    heatmap_data <- data %>%
+      filter(NAME %in% top_pathways) %>%
+      dplyr::select(NAME, NES) %>%
+      mutate(NAME = str_trunc(NAME, 40, "right"))
+    colnames(heatmap_data) <- c("NAME",comp_name)
+  }
+  
+  # Create heatmap
+  
+  mat <- as.matrix(heatmap_data[,-1])
+  rownames(mat) <- heatmap_data$NAME
+  
+  # Save heatmap
+  png(output_file, 
+      width = 12, height = 10, units = "in", res = 300)
+  
+  
+  pheatmap(mat,
+           color = colorRampPalette(c("blue", "white", "red"))(100),
+           breaks = seq(-3, 3, length.out = 101),
+           cluster_rows = TRUE,
+           cluster_cols = if(n_shared_comparisons>1){T}else{F},
+           show_rownames = TRUE,
+           show_colnames = TRUE,
+           main = if(n_shared_comparisons>1){"GSEA Summary: Top Pathways Across Comparisons"}else{"GSEA Summary"},
+           fontsize_row = 8,
+           fontsize_col = 10,
+           border_color = NA,
+           legend_breaks = c(-3, -1.5, 0, 1.5, 3),
+           legend_labels = c("Strongly Down", "Moderately Down", "Neutral", "Moderately Up", "Strongly Up"))
+  
+  dev.off()
+  message("Saved summary heatmap")
 }

@@ -9,6 +9,7 @@ suppressPackageStartupMessages (library(data.table, quietly = T))
 suppressPackageStartupMessages (library(consensusDE, quietly = T))
 suppressPackageStartupMessages (library(org.Hs.eg.db, quietly = T))
 suppressPackageStartupMessages (library(ggfortify, quietly = T))
+suppressPackageStartupMessages (library(foreach, quietly = T))
 
 # Handling input arguments
 option_list = list(
@@ -20,6 +21,8 @@ option_list = list(
               help="Path to output directory for results files.", metavar ="OutputPath"),
   make_option(c("-d", "--DEmethods"), type="character", default="deseq,edger,voom", 
               help="Comma separated list of DE methods to run", metavar ="OutputPath"),
+  make_option(c("-a", "--alpha"), type="numeric", default=0.05, 
+              help="Alpha (p threshold) for determining DEGs", metavar ="Threads"),
   make_option(c("-g", "--gtf"), type="character", default=NULL, 
               help="Path to gtf", metavar ="GTFPath"),
   make_option(c("-p", "--paired"), type="logical", default=TRUE, 
@@ -150,8 +153,8 @@ result_paths <- list.files(paste0(out_path,"results/"), pattern = "*combined_res
 
 for(comparison in result_paths){
   
-  merged_results <- fread(comparison) %>% as.data.frame()
-  recal_results <- recalculate_p_intersect(merged_results,DE_methods=DE_methods)
+  results <- fread(comparison) %>% as.data.frame()
+  recal_results <- recalculate_p_intersect(results,DE_methods=DE_methods)
   recal_results_path <- gsub(".tsv","_recal.tsv",comparison)
   write_tsv(recal_results,recal_results_path)
   
@@ -160,3 +163,36 @@ for(comparison in result_paths){
 
 saveRDS(CDE_run,paste0(out_path,"CDE_run.rds"))
 
+
+# Summarise Results
+
+
+result_paths <- list.files(paste0(out_path,"results/"), pattern = "*_recal.tsv", full.names = T)
+
+merged_results <- foreach(comp=result_paths, .combine = "bind_rows") %do% {
+  
+  fread(comparison) %>% mutate(comparison=gsub("_combined_results_recal.tsv","",basename(comp)))
+  
+}
+  
+DEG_alpha=0.05
+
+summary_DEG <- merged_results %>%
+  dplyr::select(comparison,ID,p_intersect,deseq_adj_p,edger_adj_p,voom_adj_p) %>%
+  pivot_longer(p_intersect:voom_adj_p,names_to="method", values_to = "p_adj") %>%
+  filter(p_adj<DEG_alpha) %>%
+  group_by(comparison, method) %>%
+  summarise(n_degs=n(),.groups="drop") %>%
+  pivot_wider(names_from = "method", values_from = "n_degs") %>%
+  dplyr::select(comparison,p_intersect,deseq_adj_p,edger_adj_p,voom_adj_p)
+
+# Mark methods that are excluded from p intersect
+colnames <- c("comparison","p_intersect","deseq","edger","voom")
+excluded <- which(!colnames %in% c("comparison","p_intersect", DE_methods))
+colnames[excluded] <- paste0(colnames[excluded]," (Excluded)")
+
+colnames(summary_DEG) <- colnames
+
+write_tsv(summary_DEG, paste0(out_path,"DEG_summary.tsv"))
+
+# Venn diagram?

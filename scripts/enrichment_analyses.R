@@ -15,6 +15,11 @@ suppressPackageStartupMessages (library(patchwork, quietly = T))
 suppressPackageStartupMessages (library(pcaMethods, quietly = T))
 suppressPackageStartupMessages (library(EDASeq, quietly = T))
 suppressPackageStartupMessages (library(doParallel, quietly = T))
+suppressPackageStartupMessages (library(igraph, quietly = T))
+suppressPackageStartupMessages (library(ggraph, quietly = T))
+suppressPackageStartupMessages (library(pheatmap, quietly = T))
+suppressPackageStartupMessages (library(DOSE, quietly = T))
+suppressPackageStartupMessages (library(enrichplot, quietly = T))
 
 # Handling input arguments
 option_list = list(
@@ -68,57 +73,80 @@ gsea_path <- trail_slash(gsea_path)
 
 # Run GSEA
 
+if(nchar(gene_sets)>0){
+
+  result_paths <- list.files(paste0(in_path,"results"), pattern = "*combined_results_recal.tsv", full.names = T)
+  
+  message(paste0("Detected the following results tables: \n", paste(result_paths, collapse = "\n")))
+  
+  for(comparison in result_paths){
+    
+    message(paste0("Beginning GSEA for comparison: ", gsub("_combined_results_recal.tsv","",basename(comparison))))
+    
+    results <- fread(comparison) %>% as.data.frame()
+  
+    run_gsea(results=results,
+             name=gsub("_combined_results_recal.tsv","",basename(comparison)),
+             gene_sets=gene_sets,
+             output_dir=out_path, 
+             gsea_path=gsea_path,
+             gmt_dir=gmt_dir,
+             nperm=gsea_nperm,
+             set_max=gsea_set_max,
+             set_min=gsea_set_min,
+             threads=threads,
+             threads_per_job=6,
+             log=gsea_log
+             )
+  }
+  
+  # Get GSEA Results
+  
+  all_results <- read_gsea_results(out_path)
+  
+  
+  # Generate Plots
+  
+  dir.create(paste0(out_path,"plots"))
+  
+  for(comp in unique(all_results$comparison)){
+    
+    for(db in all_results %>% filter(comparison==comp) %>% pull(database) %>% unique()){
+      
+      create_gsea_dotplot(data = all_results,
+                          comparison_name = comp,
+                          database_name = db,
+                          output_file = paste0(out_path,"plots/", comp,"-", db,"_dotplot.png"))
+      
+      
+      create_gsea_network(data = all_results,
+                          comparison_name = comp,
+                          database_name = db,
+                          gmt_dir = gmt_dir,
+                          output_file = paste0(out_path,"plots/", comp,"-", db,"_network.png"),
+                          gsea_base_dir = out_path)
+    }
+  }
+  
+  create_summary_heatmap(data = all_results, 
+                         output_file = paste0(out_path,"plots/heatmap_summary.png"),
+                         n_shared_comparisons=1)
+
+}
+
+# Run DOSE
+
 result_paths <- list.files(paste0(in_path,"results"), pattern = "*combined_results_recal.tsv", full.names = T)
 
 message(paste0("Detected the following results tables: \n", paste(result_paths, collapse = "\n")))
 
 for(comparison in result_paths){
   
-  message(paste0("Beginning GSEA for comparison: ", gsub("_combined_results_recal.tsv","",basename(comparison))))
+  message(paste0("Beginning Disease Ontology analysis for comparison: ", gsub("_combined_results_recal.tsv","",basename(comparison))))
   
-  merged_results <- fread(comparison) %>% as.data.frame()
-
-  run_gsea(results=merged_results,
-           name=gsub("_combined_results_recal.tsv","",basename(comparison)),
-           gene_sets=gene_sets,
-           output_dir=out_path, 
-           gsea_path=gsea_path,
-           gmt_dir=gmt_dir,
-           nperm=gsea_nperm,
-           set_max=gsea_set_max,
-           set_min=gsea_set_min,
-           threads=threads,
-           threads_per_job=6,
-           log=gsea_log
-           )
-}
-
-# Get GSEA Results
-
-all_results <- read_gsea_results(out_path)
-
-
-# Generate Plots
-
-dir.create(paste0(out_path,"plots"))
-
-for(comp in unique(all_results$comparison)){
+  results <- fread(comparison) %>% 
+    as.data.frame() %>%
+    add_gene_col(gene_col = "ID", from="ensembl", to="entrez", species = "human")
   
-  for(db in all_results %>% filter(comparison==comp) %>% pull(database) %>% unique()){
-    
-    create_gsea_dotplot(data = all_results,
-                        comparison_name = comp,
-                        database_name = db,
-                        output_file = paste0(out_path,"plots/", comp,"-", db,".png"))
-    
-  }
+  
 }
-
-
-create_gsea_network(data = ,
-                    comparison_name = ,
-                    database_name = ,
-                    gmt_dir = ,
-                    output_file = ,
-                    gsea_base_dir = )
-
