@@ -9,7 +9,7 @@ exec 2>&1
 
 # script location
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-#cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR"
 
 set -euo pipefail # Exit on error, undefined variable, or failed pipe
 
@@ -126,8 +126,10 @@ if [ -n "$cli_steps" ]; then
   run2_trimming=false
   run3_trimqc=false
   run4_alignment=false
+  run4o1_alignment_generate_ref=false
   run5_alignqc=false
   run6_quant=false
+  run6o1_rsem_generate_ref=false
   run7_consensusDE=false
   run8_analyse_expression=false
   run9_enrichment_analysis=false
@@ -842,6 +844,9 @@ if [ "$run7_consensusDE" = true ]; then
         --strandedness "$s" \
         --threads "$threads"
   
+  # Copy DEG summary to main results
+  cp "$output_dir/consensusDE/DEG_summary.tsv" "$output_dir/results/DEG_summary.tsv"
+  
 fi
 
 
@@ -883,6 +888,7 @@ if [ "$run9_enrichment_analysis" = true ]; then
   echo -e "----------------------------\n\n"
   
   mkdir -p "$output_dir/gsea"
+  mkdir -p "$output_dir/DOSE"
   
   monitor_process "Enrichment Analyses (GSEA)" \
     Rscript --no-save --no-restore \
