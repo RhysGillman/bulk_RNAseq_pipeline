@@ -40,7 +40,7 @@ usage() {
   cat <<EOF >&2
 Usage: $0 [OPTIONS]
 
-  -c, --config       Path to config file (default: setup.cfg)
+  -c, --config       Full path to config file
       --interactive  true|false    Override interactive mode
       --threads      N            Override number of threads
       --metadata     FILE         Override metadata.tsv path
@@ -90,6 +90,12 @@ while true; do
     *)               usage ;;
   esac
 done
+
+#############
+# Fix Paths #
+#############
+# future, check for relative paths and change to absolute to allow relative path inputs
+
 ####################
 # Read Config File #
 ####################
@@ -295,6 +301,8 @@ while IFS=$'\t' read -r line; do
   fi
 done < <(tail -n +2 "$metadata")
 
+
+
 #-------------------------------------------
 
 if [ "$run1_rawqc" = true ]; then
@@ -328,7 +336,11 @@ if [ "$run1_rawqc" = true ]; then
     confirm_continue "Do you want to continue?"
   fi
   
+  Rscript --no-save --no-restore "scripts/generate_report.R" -d "$output_dir" -m $metadata
+  
 fi
+
+
 
 #-------------------------------------------
 
@@ -445,6 +457,8 @@ if [ "$run3_trimqc" = true ]; then
     echo "You have selected interactive mode, waiting for confirmation to continue..."
     confirm_continue "Do you want to continue?"
   fi
+  
+  Rscript --no-save --no-restore "scripts/generate_report.R" -d "$output_dir" -m $metadata
   
 fi
 
@@ -617,9 +631,8 @@ if [ "$run5_alignqc" = true ]; then
     confirm_continue "Do you want to continue?"
   fi
   
-  
+  Rscript --no-save --no-restore "scripts/generate_report.R" -d "$output_dir" -m $metadata
 fi
-
 
 #-------------------------------------------
 
@@ -905,3 +918,6 @@ if [ "$run9_enrichment_analysis" = true ]; then
         --gsea-set-min "$gsea_set_min" \
         --log "$output_dir/gsea/gsea.log"
 fi
+
+
+Rscript --no-save --no-restore "scripts/generate_report.R" -d "$output_dir" -m $metadata

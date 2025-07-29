@@ -8,7 +8,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 usage() {
 cat <<EOF >&2
 Usage: $0 [OPTIONS]
-  -c, --config      Path to config file (default: setup.cfg)
+  -c, --config      Full path to config file
   -t, --threads     Total threads available for job
   -m, --memory      Total memory available for job (in GB)
   -p, --pbsdir      Directory to store PBS submission scripts in
@@ -149,7 +149,7 @@ if [ "$run1_rawqc" = true ]; then
     --keep true \
     --threads "$fastqc_threads" \
     --pbs-mem "${fastqc_mem}GB" \
-    --pbs-walltime "1:00:00"
+    --pbs-walltime "3:00:00"
   
   if [ "$do_submit" == true ]; then
     job_id_1=$(qsub "$pbsdir/1_raw_fastqc.pbs")
@@ -171,7 +171,7 @@ if [ "$run2_trimming" = true ]; then
     --keep true \
     --threads "$bbduk_threads" \
     --pbs-mem "${bbduk_mem}GB" \
-    --pbs-walltime "4:00:00"
+    --pbs-walltime "5:00:00"
   
   if [ "$do_submit" == true ]; then
     # wait for previous step to finish
@@ -182,7 +182,7 @@ if [ "$run2_trimming" = true ]; then
     fi
   fi
 fi
-
+#---------------------------Step 3---------------------------#
 if [ "$run3_trimqc" = true ]; then
   conc_jobs=$(calc_concurrent_jobs 1 $threads)
   fastqc_threads=$(calc_resource_per_job 1 "$conc_jobs" "$threads")
@@ -198,42 +198,122 @@ if [ "$run3_trimqc" = true ]; then
     --keep true \
     --threads "$fastqc_threads" \
     --pbs-mem "${fastqc_mem}GB" \
-    --pbs-walltime "1:00:00"
+    --pbs-walltime "3:00:00"
   
   if [ "$do_submit" == true ]; then
     # wait for previous step to finish
     if [[ -n "${job_id_2:-}" ]]; then
-      job_id_3=$(qsub -W depend=afterok:"job_id_2" "$pbsdir/3_trim_qc.pbs")
+      job_id_3=$(qsub -W depend=afterok:"$job_id_2" "$pbsdir/3_trim_qc.pbs")
     else
       job_id_3=$(qsub "$pbsdir/3_trim_qc.pbs")
     fi
   fi
 fi
+#---------------------------Step 4o1---------------------------#
+if [ "$run4o1_alignment_generate_ref" = true ]; then
 
-#if [ "$run4o1_alignment_generate_ref" = true ]; then
+  echo "Generating $pbsdir/4o1_generate_aligner_ref.pbs"
+  
+  star_ref_threads=$(calc_resource_per_job 12 1 "$threads")
+  star_ref_mem=$(calc_resource_per_job 60 1 "$memory")
+  
+  $SCRIPT_DIR/qsub_pipeline.sh \
+    -c $config_file \
+    --steps "4o1" \
+    --pbs-script-name "$pbsdir/4o1_generate_aligner_ref.pbs" \
+    --pbs-job-name "gen_ref" \
+    --keep true \
+    --threads "$star_ref_threads" \
+    --pbs-mem "${star_ref_mem}GB" \
+    --pbs-walltime "5:00:00"
+  
+  if [ "$do_submit" == true ]; then
+    # wait for previous step to finish
+    if [[ -n "${job_id_3:-}" ]]; then
+      job_id_4o1=$(qsub -W depend=afterok:"$job_id_3" "$pbsdir/4o1_generate_aligner_ref.pbs")
+    else
+      job_id_4o1=$(qsub "$pbsdir/4o1_generate_aligner_ref.pbs")
+    fi
+  fi
+fi
+#---------------------------Step 4---------------------------#
+if [ "$run4_alignment" = true ]; then
+  echo "Generating $pbsdir/4_alignment.pbs"
+  
+  conc_jobs=$(calc_concurrent_jobs "$STAR_threads_per_job" $threads)
+  star_threads=$(calc_resource_per_job "$STAR_threads_per_job" "$conc_jobs" "$threads")
+  # smaller amount per process
+  per_job_star_mem=$(calc_resource_per_job 5 "$conc_jobs" "$memory")
+  # add larger armount for shared genome load based on index size
+  index_dir="$STAR_index_dir/${read_lengths}bp"
+  # measure number of GB for index
+  base_index_gb=$(du -sBG --apparent-size "$index_dir" \
+  | cut -f1 | sed 's/G$//')
+               
+  star_mem=$(( per_job_star_mem + base_index_gb + 5))
+  
+  $SCRIPT_DIR/qsub_pipeline.sh \
+    -c $config_file \
+    --steps "4" \
+    --pbs-script-name "$pbsdir/4_alignment.pbs" \
+    --pbs-job-name "alignment" \
+    --keep true \
+    --threads "$star_threads" \
+    --pbs-mem "${star_mem}GB" \
+    --pbs-walltime "24:00:00"
+  
+  if [ "$do_submit" == true ]; then
+    # wait for previous steps to finish
+    if [[ -n "${job_id_3:-}" ]]; then
+      job_id_4=$(qsub -W depend=afterok:"$job_id_3" "$pbsdir/4_alignment.pbs")
+    elif [[ -n "${job_id_4o1}" ]]; then
+      job_id_4=$(qsub -W depend=afterok:"$job_id_4o1" "$pbsdir/4_alignment.pbs")
+    else
+      job_id_4=$(qsub "$pbsdir/4_alignment.pbs")
+    fi
+  fi
+fi
+#---------------------------Step 5---------------------------#
+if [ "$run5_alignqc" = true ]; then
 
-#fi
-
-#if [ "$run5_alignqc" = true ]; then
-
-#fi
-
+  echo "Generating $pbsdir/5_align_qc.pbs"
+  
+  $SCRIPT_DIR/qsub_pipeline.sh \
+    -c $config_file \
+    --steps 5 \
+    --pbs-script-name "$pbsdir/5_align_qc.pbs" \
+    --pbs-job-name "alignQC" \
+    --keep true \
+    --threads 4 \
+    --pbs-mem "8GB" \
+    --pbs-walltime "2:00:00"
+  
+  if [ "$do_submit" == true ]; then
+    # wait for previous step to finish
+    if [[ -n "${job_id_4:-}" ]]; then
+      job_id_5=$(qsub -W depend=afterok:"job_id_4" "$pbsdir/5_align_qc.pbs")
+    else
+      job_id_5=$(qsub "$pbsdir/5_align_qc.pbs")
+    fi
+  fi
+fi
+#---------------------------Step 6o1---------------------------#
 #if [ "$run6o1_rsem_generate_ref" = true ]; then
 
 #fi
-
+#---------------------------Step 6---------------------------#
 #if [ "$run6_quant" = true ]; then
 
 #fi
-
+#---------------------------Step 7---------------------------#
 #if [ "$run7_consensusDE" = true ]; then
 
 #fi
-
+#---------------------------Step 8---------------------------#
 #if [ "$run8_analyse_expression" = true ]; then
 
 #fi
-
+#---------------------------Step 9---------------------------#
 #if [ "$run9_enrichment_analysis" = true ]; then
 
 #fi
