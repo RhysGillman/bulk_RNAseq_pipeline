@@ -1,0 +1,72 @@
+---
+title: "RNAseq Report"
+output: 
+  html_document:
+    self_contained: true
+params:
+  output_dir:
+    value: NULL
+  metadata_file:   # path to original metadata
+    value: NULL
+---
+
+```{r setup, include=FALSE}
+Sys.setenv(RSTUDIO_PANDOC = "bin/pandoc-3.7.0.2/bin")
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r parse_input, include=FALSE}
+# Parse input
+output_dir <- params$output_dir
+metadata_file <- params$metadata_file
+```
+
+
+# Run Details
+
+
+# QC
+## Raw Fastq Files
+```{r raw_QC, echo=FALSE, results='asis'}
+multi_qc_path <- "qc/raw_reads/multiqc_report.html"
+fastqc_paths <- list.files("qc/raw_reads/", pattern = "*fastqc.html", full.names = T)
+if(file.exists(multi_qc_path)){
+  cat(paste0("[MultiQC Report](",multi_qc_path,"){target='_blank'}\n\n"))
+}else{
+  cat("*MultiQC report not found.*\n\n")
+}
+if(length(fastqc_paths)>0){
+  for(path in fastqc_paths){
+    cat(paste0("[",gsub("_fastqc.html","",basename(path))," FastQC Report](",path,"){target='_blank'}\n\n"))
+  }
+}else{
+  cat("*No fastqc files detected.*\n\n")
+}
+```
+## Trimmed Fastq Files
+```{r trimQC, echo=FALSE, results='asis'}
+multi_qc_path <- "qc/trimmed_reads/multiqc_report.html"
+fastqc_paths <- list.files("qc/trimmed_reads/", pattern = "*fastqc.html", full.names = T)
+if(file.exists(multi_qc_path)){
+  cat(paste0("[MultiQC Report](",multi_qc_path,"){target='_blank'}\n\n"))
+}else{
+  cat("*MultiQC report not found.*\n\n")
+}
+if(length(fastqc_paths)>0){
+  for(path in fastqc_paths){
+    cat(paste0("[",gsub("_fastqc.html","",basename(path))," FastQC Report](",path,"){target='_blank'}\n\n"))
+  }
+}else{
+  cat("*No fastqc files detected.*\n\n")
+}
+```
+## Alignment
+```{r trimQC, echo=FALSE, results='asis'}
+multi_qc_path <- "qc/alignment/multiqc_report.html"
+if(file.exists(multi_qc_path)){
+  cat(paste0("[MultiQC Report](",multi_qc_path,"){target='_blank'}\n\n"))
+}else{
+  cat("*MultiQC report not found.*\n\n")
+}
+```
+# Results
