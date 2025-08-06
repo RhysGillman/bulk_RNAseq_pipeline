@@ -101,7 +101,8 @@ if(file.exists(multi_qc_path)){
 ## Number of DEGs Detected
 
 ```{r DEG_summary}
-DEG_summary <- fread("consensusDE/DEG_summary.tsv")
+if(file.exists("consensusDE/DEG_summary.tsv")){
+  DEG_summary <- fread("consensusDE/DEG_summary.tsv")
 DT::datatable(
   DEG_summary,
   caption = htmltools::tags$caption(
@@ -113,6 +114,7 @@ DT::datatable(
     autoWidth = TRUE
   )
 )
+}
 ```
 
 ## PCA
@@ -122,13 +124,17 @@ DT::datatable(
 ### Raw Data
 
 ```{r raw_pca_plot, echo=FALSE, out.width='45%', fig.align='center'}
-knitr::include_graphics("plots/raw_data_pca.png")
+if(file.exists("plots/raw_data_pca.png")){
+  knitr::include_graphics("plots/raw_data_pca.png")
+}
 ```
 
 ### Corrected and Normalised
 
 ```{r final_pca_plot, echo=FALSE, out.width='45%', fig.align='center'}
-knitr::include_graphics("plots/corrected_normalised_data_pca.png")
+if(file.exists("plots/corrected_normalised_data_pca.png")){
+  knitr::include_graphics("plots/corrected_normalised_data_pca.png")
+}
 ```
 
 </details> 

@@ -1,26 +1,34 @@
 #!/bin/bash
 # run_pipeline.sh
+# This is the main script for running the bulk RNAseq pipeline
+# The setup.cfg and metadata.tsv files should be prepared prior to running this script
+
 
 # send all messages (stderr) into the same stream as normal output
 exec 2>&1
 
-# This is the main script for running the bulk RNAseq pipeline
-# The setup.cfg and metadata.tsv files should be prepared prior to running this script
-
 # script location
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-cd "$SCRIPT_DIR"
 
 set -euo pipefail # Exit on error, undefined variable, or failed pipe
 
-# Set up early tmp log file
+#############################
+# Set up early tmp log file #
+#############################
 
-# Backup original stdout/stderr
+## Backup original stdout/stderr
 exec 3>&1 4>&2
 
-# Create early log and redirect stdout/stderr to it, but also echo to original stdout
+## Create early log and redirect stdout/stderr to it, but also echo to original stdout
 early_log=".preconfig_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee "$early_log" >&3) 2>&1
+
+# Automatically clean up early log on any exit (success or failure)
+trap 'rm -f "$early_log"' EXIT
+
+##################
+# Start Messages #
+##################
 
 echo "Start Time: $(date)"
 echo "Host: $(hostname)"
@@ -53,6 +61,15 @@ EOF
   exit 1
 }
 
+abspath() {
+  local input="$1"
+  if [[ "$input" = /* ]]; then
+    echo "$input"
+  else
+    echo "$(cd "$(dirname "$input")" && pwd -P)/$(basename "$input")"
+  fi
+}
+
 ############################
 # Handling input arguments #
 ############################
@@ -67,7 +84,7 @@ cli_steps=
 cli_DEmethods=
 
 # Default values
-config_file="setup.cfg"
+config_file=""
 
 # getopt setup
 TEMP=$(getopt -o c: \
@@ -91,11 +108,6 @@ while true; do
   esac
 done
 
-#############
-# Fix Paths #
-#############
-# future, check for relative paths and change to absolute to allow relative path inputs
-
 ####################
 # Read Config File #
 ####################
@@ -104,12 +116,48 @@ echo -e "\n\n---------------------------"
 echo -e "Reading Config File"
 echo -e "---------------------------\n\n"
 
+# convert config_file to absolute path
+config_file="$(abspath "$config_file")"
+
 if [ ! -f "$config_file" ] || [ ! -r "$config_file" ] || [ ! -s "$config_file" ]; then
   echo 'Config file does not exist, is not readable, or is empty' >&2
   exit 1
 fi
 
 source "$config_file"
+
+
+#############
+# Fix Paths #
+#############
+
+if [[ -z "$output_dir" ]]; then
+  echo "Error: output_dir not set in config file" >&2
+  exit 1
+fi
+
+output_dir="$(abspath "$output_dir")"
+
+if [ "$interactive" = true ]; then
+
+  if [ -d "$output_dir" ]; then
+    echo "Output directory already exists and files may be overwritten."
+    confirm_continue "Are you sure you want to continue?"
+    mkdir -p "$output_dir"
+  fi
+
+fi
+
+if [[ -z "$metadata" ]]; then
+  echo "Error: metadata not supplied in config file" >&2
+  exit 1
+fi
+
+metadata="$(abspath "$metadata")"
+
+####################
+# Handle CLI Steps #
+####################
 
 # Default fallbacks
 : "${threads:=4}"
@@ -160,22 +208,16 @@ if [ -n "$cli_steps" ]; then
   done
 fi
 
-if [[ -z "$output_dir" ]]; then
-  echo "Error: output_dir not set in config file" >&2
-  exit 1
-fi
+###########################
+# Check Missing Variables #
+###########################
 
-if [ "$interactive" = true ]; then
+: "${paired:?Error: paired must be set in config file to true or false}"
 
-  if [ -d "$output_dir" ]; then
-    echo "Output directory already exists and files may be overwritten."
-    confirm_continue "Are you sure you want to continue?"
-    mkdir -p "$output_dir"
-  fi
+###############################
+# Setup logging in output dir #
+###############################
 
-fi
-
-# Setup logging in output dir
 mkdir -p "$output_dir/logs"
 timestamp=$(date +%Y%m%d_%H%M%S)
 final_log="$output_dir/logs/pipeline_${timestamp}.log"
@@ -187,6 +229,7 @@ exec 1>&3 2>&4
 exec > >(tee "$final_log") 2>&1
 
 # Append early log contents to file only (not reprinted to screen)
+trap - EXIT 
 cat "$early_log" >> "$final_log"
 rm -f "$early_log"
 
@@ -195,6 +238,10 @@ rm -f "$early_log"
 
 RESOURCE_LOG="$output_dir/logs/resource_utilisation_${timestamp}.log"
 : > "$RESOURCE_LOG"      # truncate or create
+
+
+
+
 
 echo -e "\n\n"
 echo "Config file read successfully"
@@ -255,7 +302,11 @@ monitor_process() {
   echo "===== $process_name END:   $(date '+%F %T') =====" >> "$RESOURCE_LOG"
 }
 
+############################
+# Move to Script Directory #
+###########################
 
+cd "$SCRIPT_DIR"
 
 #####################
 # Setup Environment #
@@ -269,47 +320,44 @@ fi
 # Get FASTQ Filenames #
 #######################
 
-# First getting all filenames
-filename_col=$(head -1 "$metadata" | tr '\t' '\n' | grep -nx 'filename' | cut -d: -f1)
-
-# Read all filenames into an array
-mapfile -t all_files < <(tail -n +2 "$metadata" | cut -f"$filename_col")
-
-
-# Next need to get forward and reverse reads per sample
-# Get header line from the metadata
+# Get header and column indices
 header=$(head -n 1 "$metadata")
-
-# Get column numbers by header name
 sample_col=$(echo "$header" | tr '\t' '\n' | grep -nx 'sample_ID' | cut -d: -f1)
 filename_col=$(echo "$header" | tr '\t' '\n' | grep -nx 'filename' | cut -d: -f1)
 
-# Safety check: ensure required columns were found
+# Safety check
 if [[ -z "$sample_col" || -z "$filename_col" ]]; then
   echo "Error: sample_ID and/or filename column not found in metadata." >&2
   exit 1
 fi
 
 
-declare -A r1_files   # sample_ID → R1 filepath
-declare -A r2_files   # sample_ID → R2 filepath
+declare -A all_files
 
+# Paired-end mode
+if [ "$paired" = true ]; then
+  declare -A r1_files  
+  declare -A r2_files   
+fi
+
+# Process metadata
 while IFS=$'\t' read -r line; do
-  # Extract sample_ID and filename from this line using awk based on column number
   sample=$(echo "$line" | awk -v col=$sample_col -F'\t' '{print $col}')
   filename=$(echo "$line" | awk -v col=$filename_col -F'\t' '{print $col}')
-  
-  # Determine if this is an R1 or R2 read based on filename pattern
-  if [[ "$filename" =~ _R1 ]]; then
-    r1_files["$sample"]="$filename"
-  elif [[ "$filename" =~ _R2 ]]; then
-    r2_files["$sample"]="$filename"
+
+  if [ "$paired" = true ]; then
+    if [[ "$filename" =~ _R1 ]]; then
+      r1_files["$sample"]="$filename"
+      all_files["$sample"]="$filename"   # use R1 as primary
+    elif [[ "$filename" =~ _R2 ]]; then
+      r2_files["$sample"]="$filename"
+    else
+      echo "Warning: File for sample $sample is neither R1 nor R2: $filename" >&2
+    fi
   else
-    echo "Warning: File for sample $sample is neither R1 nor R2: $filename" >&2
+    all_files["$sample"]="$filename"
   fi
 done < <(tail -n +2 "$metadata")
-
-
 
 #-------------------------------------------
 
@@ -388,36 +436,70 @@ if [ "$run2_trimming" = true ]; then
   fi
   echo "Running up to $bbduk_jobs bbduk jobs in parallel, each with $threads_per_job threads."
   
+  if [ "$paired" = true ]; then
+    # loop over samples and launch bbduk in background, throttled to $bbduk_jobs
+      for sample in "${!r1_files[@]}"; do
+        fwd="${r1_files[$sample]}"
+        rev="${r2_files[$sample]}"
+    
+        echo "Trimming adapters in sample: $sample"
+        echo "Forward read: $fwd"
+        echo "Reverse read: $rev"
+        (
+          monitor_process "Sequence Trimming" \
+          "$bbmap_path/bbduk.sh" -Xmx5g \
+            t=$threads_per_job \
+            ref=$bbduk_adapters \
+            in1="$fwd" \
+            in2="$rev" \
+            out1="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz" \
+            out2="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz" \
+            outm1="$output_dir/intermediate_files/${sample}_R1_trim_fail.fastq.gz" \
+            outm2="$output_dir/intermediate_files/${sample}_R2_trim_fail.fastq.gz" \
+            outs="$output_dir/intermediate_files/${sample}_pass_singletons.fastq.gz" \
+            ktrim=$bbduk_ktrim \
+            k=$bbduk_k \
+            mink=$bbduk_mink \
+            hdist=$bbduk_hdist \
+            qtrim=$bbduk_qtrim \
+            trimq=$bbduk_trimq \
+            minlen=$bbduk_minlen \
+            tpe tbo
+            #tpe trims both paired reads to same length, tbo trims overlapping reads
+        ) &
+        # throttle: wait if too many bbduk jobs are running
+        while [ "$(jobs -rp | wc -l)" -ge "$bbduk_jobs" ]; do
+          sleep 5
+        done
+      done
+    
+      wait  # ensure all background bbsuk jobs finish before proceeding
+    
+  elif [ "$paired" = false ]; then
   
-  # loop over samples and launch bbduk in background, throttled to $bbduk_jobs
-    for sample in "${!r1_files[@]}"; do
-      fwd="${r1_files[$sample]}"
-      rev="${r2_files[$sample]}"
+    # loop over samples and launch bbduk in background, throttled to $bbduk_jobs
+    
+    for sample in "${!all_files[@]}"; do
+    
+      file=${all_files[$sample]}
   
-      echo "Trimming adapters in sample: $sample"
-      echo "Forward read: $fwd"
-      echo "Reverse read: $rev"
+      echo "Trimming adapters for sample  $sample"
+
       (
         monitor_process "Sequence Trimming" \
         "$bbmap_path/bbduk.sh" -Xmx5g \
           t=$threads_per_job \
           ref=$bbduk_adapters \
-          in1="$fwd" \
-          in2="$rev" \
-          out1="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz" \
-          out2="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz" \
-          outm1="$output_dir/intermediate_files/${sample}_R1_trim_fail.fastq.gz" \
-          outm2="$output_dir/intermediate_files/${sample}_R2_trim_fail.fastq.gz" \
-          outs="$output_dir/intermediate_files/${sample}_pass_singletons.fastq.gz" \
+          in="$file" \
+          out="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz" \
+          outm="$output_dir/intermediate_files/${sample}_R1_trim_fail.fastq.gz" \
           ktrim=$bbduk_ktrim \
           k=$bbduk_k \
           mink=$bbduk_mink \
           hdist=$bbduk_hdist \
           qtrim=$bbduk_qtrim \
           trimq=$bbduk_trimq \
-          minlen=$bbduk_minlen \
-          tpe tbo
-          #tpe trims both paired reads to same length, tbo trims overlapping reads
+          minlen=$bbduk_minlen
       ) &
       # throttle: wait if too many bbduk jobs are running
       while [ "$(jobs -rp | wc -l)" -ge "$bbduk_jobs" ]; do
@@ -426,8 +508,10 @@ if [ "$run2_trimming" = true ]; then
     done
   
     wait  # ensure all background bbsuk jobs finish before proceeding
-    
-    echo "Trimmed fastq files are in $output_dir/intermediate_files"
+  
+  fi
+  
+  echo "Trimmed fastq files are in $output_dir/intermediate_files"
 
 fi
 
@@ -461,7 +545,7 @@ if [ "$run3_trimqc" = true ]; then
   
   "$multiqc_path/multiqc" "$output_dir/qc/trimmed_reads" -o "$output_dir/qc/trimmed_reads"
   
-  echo "Trimmed read QC is available in $output_dir/qc/raw_reads"
+  echo "Trimmed read QC is available in $output_dir/qc/trimmed_reads"
   
   if [ "$interactive" = true ]; then
     echo
@@ -564,49 +648,96 @@ if [ "$run4_alignment" = true ]; then
   trap 'echo "Cleaning up STAR shared genome memory..."; \
         "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" --genomeLoad Remove' EXIT
 
-
-  # loop over samples and launch STAR in background, throttled to $star_jobs
-  for sample in "${!r1_files[@]}"; do
-    fwd="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz"
-    rev="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz"
-	  
-	  echo "Beginning alignment for ${sample} using:"
-	  echo "$fwd"
-	  echo "$rev"
-	  echo -e "\n\n"
-    (
-  	monitor_process "Read Alignment" \
-      "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" \
-        --genomeLoad LoadAndKeep \
-        --readFilesIn "$fwd" "$rev" \
-        --runThreadN $threads_per_job \
-        --limitBAMsortRAM 10000000000 \
-        --outSAMattrRGline ID:"$sample" SM:"$sample"_l1 PL:ILLUMINA \
-        --sjdbOverhang $((read_lengths-1)) \
-        --alignSJDBoverhangMin $STAR_alignSJDBoverhangMin \
-        --outFilterMultimapNmax $STAR_outFilterMultimapNmax \
-        --readFilesCommand zcat \
-        --outFileNamePrefix "$output_dir/intermediate_files/${sample}_" \
-        --outSAMtype BAM SortedByCoordinate \
-        --quantMode TranscriptomeSAM GeneCounts \
-        --outMultimapperOrder Random \
-        --genomeSAindexNbases $STAR_genomeSAindexNbases
+  if [ "$paired" = true ]; then
+    # loop over samples and launch STAR in background, throttled to $star_jobs
+    for sample in "${!r1_files[@]}"; do
+      fwd="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz"
+      rev="$output_dir/intermediate_files/${sample}_R2_trim.fastq.gz"
+  	  
+  	  echo "Beginning alignment for ${sample} using:"
+  	  echo "$fwd"
+  	  echo "$rev"
+  	  echo -e "\n\n"
+      (
+    	monitor_process "Read Alignment" \
+        "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" \
+          --genomeLoad LoadAndKeep \
+          --readFilesIn "$fwd" "$rev" \
+          --runThreadN $threads_per_job \
+          --limitBAMsortRAM 10000000000 \
+          --outSAMattrRGline ID:"$sample" SM:"$sample"_l1 PL:ILLUMINA \
+          --sjdbOverhang $((read_lengths-1)) \
+          --alignSJDBoverhangMin $STAR_alignSJDBoverhangMin \
+          --outFilterMultimapNmax $STAR_outFilterMultimapNmax \
+          --readFilesCommand zcat \
+          --outFileNamePrefix "$output_dir/intermediate_files/${sample}_" \
+          --outSAMtype BAM SortedByCoordinate \
+          --quantMode TranscriptomeSAM GeneCounts \
+          --outMultimapperOrder Random \
+          --genomeSAindexNbases $STAR_genomeSAindexNbases
+        
+      echo -e "Completed STAR Alignment, basic info below, more in $output_dir/intermediate_files/${sample}_Log.final.out\n"    
+      # print important log information
+      grep -E "Uniquely mapped reads|reads mapped to multiple loci|reads unmapped" "$output_dir/intermediate_files/${sample}_Log.final.out"
+      ) &
+      # throttle: wait if too many RSEM jobs are running
+      while [ "$(jobs -rp | wc -l)" -ge "$STAR_jobs" ]; do
+        sleep 5
+      done
       
-    echo -e "Completed STAR Alignment, basic info below, more in $output_dir/intermediate_files/${sample}_Log.final.out\n"    
-    # print important log information
-    grep -E "Uniquely mapped reads|reads mapped to multiple loci|reads unmapped" "$output_dir/intermediate_files/${sample}_Log.final.out"
-    ) &
-    # throttle: wait if too many RSEM jobs are running
-    while [ "$(jobs -rp | wc -l)" -ge "$STAR_jobs" ]; do
-      sleep 5
+      # Delay after each launch to stagger memory load
+      sleep 10
+      
     done
+  
+    wait  # ensure all background jobs finish before proceeding
     
-    # Delay after each launch to stagger memory load
-    sleep 10
+  elif [ "$paired" = false ]; then
     
-  done
-
-  wait  # ensure all background jobs finish before proceeding
+     # loop over samples and launch STAR in background, throttled to $star_jobs
+    for sample in "${!all_files[@]}"; do
+      
+      file="$output_dir/intermediate_files/${sample}_R1_trim.fastq.gz"
+  	  
+  	  echo "Beginning alignment for ${sample} using:"
+  	  echo "$file"
+  	  echo -e "\n\n"
+      (
+    	monitor_process "Read Alignment" \
+        "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" \
+          --genomeLoad LoadAndKeep \
+          --readFilesIn "$file" \
+          --runThreadN $threads_per_job \
+          --limitBAMsortRAM 10000000000 \
+          --outSAMattrRGline ID:"$sample" SM:"$sample"_l1 PL:ILLUMINA \
+          --sjdbOverhang $((read_lengths-1)) \
+          --alignSJDBoverhangMin $STAR_alignSJDBoverhangMin \
+          --outFilterMultimapNmax $STAR_outFilterMultimapNmax \
+          --readFilesCommand zcat \
+          --outFileNamePrefix "$output_dir/intermediate_files/${sample}_" \
+          --outSAMtype BAM SortedByCoordinate \
+          --quantMode TranscriptomeSAM GeneCounts \
+          --outMultimapperOrder Random \
+          --genomeSAindexNbases $STAR_genomeSAindexNbases
+        
+      echo -e "Completed STAR Alignment, basic info below, more in $output_dir/intermediate_files/${sample}_Log.final.out\n"    
+      # print important log information
+      grep -E "Uniquely mapped reads|reads mapped to multiple loci|reads unmapped" "$output_dir/intermediate_files/${sample}_Log.final.out"
+      ) &
+      # throttle: wait if too many RSEM jobs are running
+      while [ "$(jobs -rp | wc -l)" -ge "$STAR_jobs" ]; do
+        sleep 5
+      done
+      
+      # Delay after each launch to stagger memory load
+      sleep 10
+      
+    done
+  
+    wait  # ensure all background jobs finish before proceeding
+  
+  fi
+  
   
   echo "Alignment files are available in $output_dir/intermediate_files/"
   
@@ -616,10 +747,15 @@ if [ "$run4_alignment" = true ]; then
     --genomeLoad Remove \
     > /dev/null 2>&1 || true
 
-
-	for sample in "${!r1_files[@]}"; do
-    samtools index "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
-  done
+  if [ "$paired" = true ]; then
+  	for sample in "${!r1_files[@]}"; do
+      samtools index "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
+    done
+  elif [ "$paired" = true ]; then
+  for sample in "${!all_files[@]}"; do
+      samtools index "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
+    done
+  fi
   
 fi
 
@@ -740,33 +876,60 @@ if [ "$run6_quant" = true ]; then
     
     echo "Running up to $quant_jobs RSEM jobs in parallel, each with $threads_per_job threads."
   
-    # loop over samples and launch RSEM in background, throttled to $quant_jobs
-    for sample in "${!r1_files[@]}"; do
-      echo -e "\nQuantifying reads for sample: $sample using RSEM\n"
-      (
-        monitor_process "RSEM Quantification: $sample" \
-          "$rsem_path/rsem-calculate-expression" \
-            -p "$threads_per_job" \
-            --paired-end \
-            --quiet \
-            --alignments \
-            --strandedness "$rsem_s" \
-            --no-bam-output \
-            "$output_dir/intermediate_files/${sample}_Aligned.toTranscriptome.out.bam" \
-            "$RSEM_index_dir" \
-            "$output_dir/intermediate_files/${sample}"
-        
-        echo -e "Completed RSEM for sample: $sample"
-        
-      ) &
-      # throttle: wait if too many RSEM jobs are running
-      while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
-        sleep 5
+    if [ "$paired" = true ]; then
+      # loop over samples and launch RSEM in background, throttled to $quant_jobs
+      for sample in "${!r1_files[@]}"; do
+        echo -e "\nQuantifying reads for sample: $sample using RSEM\n"
+        (
+          monitor_process "RSEM Quantification: $sample" \
+            "$rsem_path/rsem-calculate-expression" \
+              -p "$threads_per_job" \
+              --paired-end \
+              --quiet \
+              --alignments \
+              --strandedness "$rsem_s" \
+              --no-bam-output \
+              "$output_dir/intermediate_files/${sample}_Aligned.toTranscriptome.out.bam" \
+              "$RSEM_index_dir" \
+              "$output_dir/intermediate_files/${sample}"
+          
+          echo -e "Completed RSEM for sample: $sample"
+          
+        ) &
+        # throttle: wait if too many RSEM jobs are running
+        while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
+          sleep 5
+        done
       done
-    done
-  
-    wait  # ensure all background RSEM jobs finish before proceeding
     
+      wait  # ensure all background RSEM jobs finish before proceeding
+    elif [ "$paired" = false ]; then
+      # loop over samples and launch RSEM in background, throttled to $quant_jobs
+      for sample in "${!all_files[@]}"; do
+        echo -e "\nQuantifying reads for sample: $sample using RSEM\n"
+        (
+          monitor_process "RSEM Quantification: $sample" \
+            "$rsem_path/rsem-calculate-expression" \
+              -p "$threads_per_job" \
+              --quiet \
+              --alignments \
+              --strandedness "$rsem_s" \
+              --no-bam-output \
+              "$output_dir/intermediate_files/${sample}_Aligned.toTranscriptome.out.bam" \
+              "$RSEM_index_dir" \
+              "$output_dir/intermediate_files/${sample}"
+          
+          echo -e "Completed RSEM for sample: $sample"
+          
+        ) &
+        # throttle: wait if too many RSEM jobs are running
+        while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
+          sleep 5
+        done
+      done
+    
+      wait  # ensure all background RSEM jobs finish before proceeding
+    fi
     echo "RSEM results files are available in $output_dir/intermediate_files/"
   fi
   
@@ -783,30 +946,59 @@ if [ "$run6_quant" = true ]; then
     
     echo "Running up to $quant_jobs featureCounts jobs in parallel, each with $threads_per_job threads."
     
-    for sample in "${!r1_files[@]}"; do
-      echo -e "\nQuantifying reads for sample: $sample using featureCounts\n"
-      (
-        monitor_process "FeatureCounts Quantification: $sample" \
-            "$subread_path/featureCounts" \
-            -p \
-            -T "$threads_per_job" \
-            -s $featurecounts_s \
-            -t exon \
-            -g gene_id \
-            -a "$ref_gtf" \
-            -o "$output_dir/intermediate_files/${sample}_featureCounts.output" \
-            "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
-        echo -e "Completed featureCounts for sample: $sample"
-      ) &
-      
-      
-      # throttle: wait if too many featurecounts jobs are running
-      while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
-        sleep 5
+    if [ "$paired" = true ]; then
+      for sample in "${!r1_files[@]}"; do
+        echo -e "\nQuantifying reads for sample: $sample using featureCounts\n"
+        (
+          monitor_process "FeatureCounts Quantification: $sample" \
+              "$subread_path/featureCounts" \
+              -p \
+              -T "$threads_per_job" \
+              -s $featurecounts_s \
+              -t exon \
+              -g gene_id \
+              -a "$ref_gtf" \
+              -o "$output_dir/intermediate_files/${sample}_featureCounts.output" \
+              "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
+          echo -e "Completed featureCounts for sample: $sample"
+        ) &
+        
+        
+        # throttle: wait if too many featurecounts jobs are running
+        while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
+          sleep 5
+        done
       done
-    done
-  
-    wait  # ensure all background featurecounts jobs finish before proceeding
+    
+      wait  # ensure all background featurecounts jobs finish before proceeding
+      
+    elif [ "$paired" = false ]; then
+      
+      for sample in "${!all_files[@]}"; do
+        echo -e "\nQuantifying reads for sample: $sample using featureCounts\n"
+        (
+          monitor_process "FeatureCounts Quantification: $sample" \
+              "$subread_path/featureCounts" \
+              -T "$threads_per_job" \
+              -s $featurecounts_s \
+              -t exon \
+              -g gene_id \
+              -a "$ref_gtf" \
+              -o "$output_dir/intermediate_files/${sample}_featureCounts.output" \
+              "$output_dir/intermediate_files/${sample}_Aligned.sortedByCoord.out.bam"
+          echo -e "Completed featureCounts for sample: $sample"
+        ) &
+        
+        
+        # throttle: wait if too many featurecounts jobs are running
+        while [ "$(jobs -rp | wc -l)" -ge "$quant_jobs" ]; do
+          sleep 5
+        done
+      done
+    
+      wait  # ensure all background featurecounts jobs finish before proceeding
+      
+    fi
     
     echo "featureCounts results files are available in $output_dir/intermediate_files/"
   fi
@@ -816,7 +1008,7 @@ fi
 
 
 if [ "$quantification" = "RSEM" ]; then
-  echo "featureCounts: $($rsem_path/rsem-calculate-expression --version 2>&1)" >> "$version_log"
+  echo "RSEM: $($rsem_path/rsem-calculate-expression --version 2>&1)" >> "$version_log"
 fi
 if [ "$quantification" = "featureCounts" ]; then
   echo "featureCounts: $($subread_path/featureCounts -v 2>&1)" >> "$version_log"
@@ -845,9 +1037,15 @@ if [ "$run7_consensusDE" = true ]; then
   fi
   
   if [ "$quantification" = "featureCounts" ]; then
-    for sample in "${!r1_files[@]}"; do
-      awk 'NR>2 {print $1, $NF}' "$output_dir/intermediate_files/${sample}_featureCounts.output" > "$output_dir/consensusDE/input/${sample}_summarised_counts.txt"
-    done
+    if [ "$paired" = true ]; then
+      for sample in "${!r1_files[@]}"; do
+        awk 'NR>2 {print $1, $NF}' "$output_dir/intermediate_files/${sample}_featureCounts.output" > "$output_dir/consensusDE/input/${sample}_summarised_counts.txt"
+      done
+    elif [ "$paired" = false ]; then
+      for sample in "${!all_files[@]}"; do
+        awk 'NR>2 {print $1, $NF}' "$output_dir/intermediate_files/${sample}_featureCounts.output" > "$output_dir/consensusDE/input/${sample}_summarised_counts.txt"
+      done
+    fi
   fi
   
   if [ "$stranded_reads" = "auto" ]; then

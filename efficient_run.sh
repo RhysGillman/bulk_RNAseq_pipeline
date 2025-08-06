@@ -18,7 +18,6 @@ EOF
 exit 1
 }
 
-
 calc_resource_per_job() {
   local per_job=$1
   local n_jobs=$2
@@ -41,6 +40,23 @@ calc_concurrent_jobs() {
     echo 1
   fi
 }
+
+last_job_id=""
+
+submit_job() {
+  local script="$1"
+
+  if [[ "$do_submit" == true ]]; then
+    if [[ -n "$last_job_id" ]]; then
+      job_id=$(qsub -W depend=afterok:"$last_job_id" "$script")
+    else
+      job_id=$(qsub "$script")
+    fi
+    echo "Submitted $script as $job_id"
+    last_job_id="$job_id"
+  fi
+}
+
 
 ############################
 # Handling input arguments #
@@ -135,7 +151,10 @@ echo "Detected $n_samples samples from metadata"
 
 #---------------------------Step 1---------------------------#
 if [ "$run1_rawqc" = true ]; then
-  conc_jobs=$(calc_concurrent_jobs 1 $threads)
+  conc_jobs=$(calc_concurrent_jobs 1 "$threads")
+  if (( conc_jobs > n_files )); then
+    conc_jobs=$n_files
+  fi
   fastqc_threads=$(calc_resource_per_job 1 "$conc_jobs" "$threads")
   fastqc_mem=$(calc_resource_per_job 1 "$conc_jobs" "$memory")
   
@@ -151,13 +170,14 @@ if [ "$run1_rawqc" = true ]; then
     --pbs-mem "${fastqc_mem}GB" \
     --pbs-walltime "3:00:00"
   
-  if [ "$do_submit" == true ]; then
-    job_id_1=$(qsub "$pbsdir/1_raw_fastqc.pbs")
-  fi
+  submit_job "$pbsdir/1_raw_fastqc.pbs"
 fi
 #---------------------------Step 2---------------------------#
 if [ "$run2_trimming" = true ]; then
-  conc_jobs=$(calc_concurrent_jobs "$bbduk_threads_per_job" $threads)
+  conc_jobs=$(calc_concurrent_jobs "$bbduk_threads_per_job" "$threads")
+  if (( conc_jobs > n_samples )); then
+    conc_jobs=$n_samples
+  fi
   bbduk_threads=$(calc_resource_per_job "$bbduk_threads_per_job" "$conc_jobs" "$threads")
   bbduk_mem=$(calc_resource_per_job 2 "$conc_jobs" "$memory")
   
@@ -173,18 +193,14 @@ if [ "$run2_trimming" = true ]; then
     --pbs-mem "${bbduk_mem}GB" \
     --pbs-walltime "5:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_1:-}" ]]; then
-      job_id_2=$(qsub -W depend=afterok:"$job_id_1" "$pbsdir/2_trimming.pbs")
-    else
-      job_id_2=$(qsub "$pbsdir/2_trimming.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/2_trimming.pbs"
 fi
 #---------------------------Step 3---------------------------#
 if [ "$run3_trimqc" = true ]; then
   conc_jobs=$(calc_concurrent_jobs 1 $threads)
+  if (( conc_jobs > n_files )); then
+    conc_jobs=$n_files
+  fi
   fastqc_threads=$(calc_resource_per_job 1 "$conc_jobs" "$threads")
   fastqc_mem=$(calc_resource_per_job 1 "$conc_jobs" "$memory")
   
@@ -200,14 +216,8 @@ if [ "$run3_trimqc" = true ]; then
     --pbs-mem "${fastqc_mem}GB" \
     --pbs-walltime "3:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_2:-}" ]]; then
-      job_id_3=$(qsub -W depend=afterok:"$job_id_2" "$pbsdir/3_trim_qc.pbs")
-    else
-      job_id_3=$(qsub "$pbsdir/3_trim_qc.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/3_trim_qc.pbs"
+  
 fi
 #---------------------------Step 4o1---------------------------#
 if [ "$run4o1_alignment_generate_ref" = true ]; then
@@ -227,20 +237,16 @@ if [ "$run4o1_alignment_generate_ref" = true ]; then
     --pbs-mem "${star_ref_mem}GB" \
     --pbs-walltime "5:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_3:-}" ]]; then
-      job_id_4o1=$(qsub -W depend=afterok:"$job_id_3" "$pbsdir/4o1_generate_aligner_ref.pbs")
-    else
-      job_id_4o1=$(qsub "$pbsdir/4o1_generate_aligner_ref.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/4o1_generate_aligner_ref.pbs"
 fi
 #---------------------------Step 4---------------------------#
 if [ "$run4_alignment" = true ]; then
   echo "Generating $pbsdir/4_alignment.pbs"
   
   conc_jobs=$(calc_concurrent_jobs "$STAR_threads_per_job" $threads)
+  if (( conc_jobs > n_samples )); then
+    conc_jobs=$n_samples
+  fi
   star_threads=$(calc_resource_per_job "$STAR_threads_per_job" "$conc_jobs" "$threads")
   # smaller amount per process
   per_job_star_mem=$(calc_resource_per_job 5 "$conc_jobs" "$memory")
@@ -262,16 +268,7 @@ if [ "$run4_alignment" = true ]; then
     --pbs-mem "${star_mem}GB" \
     --pbs-walltime "24:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous steps to finish
-    if [[ -n "${job_id_3:-}" ]]; then
-      job_id_4=$(qsub -W depend=afterok:"$job_id_3" "$pbsdir/4_alignment.pbs")
-    elif [[ -n "${job_id_4o1}" ]]; then
-      job_id_4=$(qsub -W depend=afterok:"$job_id_4o1" "$pbsdir/4_alignment.pbs")
-    else
-      job_id_4=$(qsub "$pbsdir/4_alignment.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/4_alignment.pbs"
 fi
 #---------------------------Step 5---------------------------#
 if [ "$run5_alignqc" = true ]; then
@@ -288,14 +285,7 @@ if [ "$run5_alignqc" = true ]; then
     --pbs-mem "8GB" \
     --pbs-walltime "2:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_4:-}" ]]; then
-      job_id_5=$(qsub -W depend=afterok:"$job_id_4" "$pbsdir/5_align_qc.pbs")
-    else
-      job_id_5=$(qsub "$pbsdir/5_align_qc.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/5_align_qc.pbs"
 fi
 #---------------------------Step 6o1---------------------------#
 #if [ "$run6o1_rsem_generate_ref" = true ]; then
@@ -307,6 +297,9 @@ if [ "$run6_quant" = true ]; then
   echo "Generating $pbsdir/6_quant.pbs"
   
   conc_jobs=$(calc_concurrent_jobs "$quant_threads_per_job" $threads)
+  if (( conc_jobs > n_samples )); then
+    conc_jobs=$n_samples
+  fi
   quant_threads=$(calc_resource_per_job "$quant_threads_per_job" "$conc_jobs" "$threads")
   
   if [ "$quantification" = "featureCounts" ]; then
@@ -323,14 +316,7 @@ if [ "$run6_quant" = true ]; then
     --pbs-mem "${quant_mem}GB" \
     --pbs-walltime "24:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_5:-}" ]]; then
-      job_id_6=$(qsub -W depend=afterok:"$job_id_5" "$pbsdir/6_quant.pbs")
-    else
-      job_id_6=$(qsub "$pbsdir/6_quant.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/6_quant.pbs"
   
 fi
 #---------------------------Step 7---------------------------#
@@ -349,14 +335,7 @@ if [ "$run7_consensusDE" = true ]; then
     --pbs-mem "${consensusDE_mem}GB" \
     --pbs-walltime "24:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_6:-}" ]]; then
-      job_id_7=$(qsub -W depend=afterok:"$job_id_6" "$pbsdir/7_consensusDE.pbs")
-    else
-      job_id_7=$(qsub "$pbsdir/7_consensusDE.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/7_consensusDE.pbs"
 fi
 #---------------------------Step 8---------------------------#
 if [ "$run8_analyse_expression" = true ]; then
@@ -372,14 +351,7 @@ if [ "$run8_analyse_expression" = true ]; then
     --pbs-mem "8GB" \
     --pbs-walltime "4:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_7:-}" ]]; then
-      job_id_8=$(qsub -W depend=afterok:"$job_id_7" "$pbsdir/8_analyse_expression.pbs")
-    else
-      job_id_8=$(qsub "$pbsdir/8_analyse_expression.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/8_analyse_expression.pbs"
 fi
 #---------------------------Step 9---------------------------#
 if [ "$run9_enrichment_analysis" = true ]; then
@@ -395,12 +367,5 @@ if [ "$run9_enrichment_analysis" = true ]; then
     --pbs-mem "16GB" \
     --pbs-walltime "8:00:00"
   
-  if [ "$do_submit" == true ]; then
-    # wait for previous step to finish
-    if [[ -n "${job_id_8:-}" ]]; then
-      job_id_9=$(qsub -W depend=afterok:"$job_id_8" "$pbsdir/9_enrichment_analysis.pbs")
-    else
-      job_id_9=$(qsub "$pbsdir/9_enrichment_analysis.pbs")
-    fi
-  fi
+  submit_job "$pbsdir/9_enrichment_analysis.pbs"
 fi
