@@ -52,7 +52,7 @@ out_path <- trail_slash(out_path)
 metadata <- fread(metadata_path)
 
 CDE_raw <- readRDS(paste0(in_path, "CDE_se_raw.rds"))
-CDE_run <- readRDS(paste0(in_path, "CDE_run.rds"))
+#CDE_run <- readRDS(paste0(in_path, "CDE_run.rds"))
 
 
 # check results 
@@ -62,6 +62,8 @@ result_paths <- list.files(paste0(in_path,"results/"), pattern = "*combined_resu
 for(comparison in result_paths){
   
   merged_results <- fread(comparison) %>% as.data.frame()
+  
+  comparison_name <- gsub("_combined_results_recal.tsv","",basename(comparison))
   
   # Volcano plot using p_intersect
   p1 <- generate_volcano_plot(data = merged_results,
@@ -92,26 +94,35 @@ for(comparison in result_paths){
   (p1 / (wrap_plots(p_methods, nrow = 1) + plot_layout(axis_titles = "collect"))) +
     plot_layout(guides = "collect",axis_titles = "collect")
   
-  ggsave(paste0(out_path,"plots/all_volcano_plots.png"), height = 30, width=20, units="cm")
-  
-  
-  
-  
-  # PCAs
-  
-  se_qc <- newSeqExpressionSet(assays(CDE_raw)$counts,
-                               phenoData = data.frame(colData(CDE_raw)),
-                               row.names = colnames(assays(CDE_raw)$counts))
-  
-  raw_logCPM <- consensusDE:::check_normalise(se_in = se_qc)
-  
-  generate_PCA_plot(raw_logCPM, metadata, "Raw")
-  
-  ggsave(paste0(out_path,"plots/raw_data_pca.png"))
-  
-  final_logCPM <- consensusDE:::check_normalise(se_in = CDE_run$summarized)
-  
-  generate_PCA_plot(final_logCPM, metadata, "Normalised - Corrected")
-  ggsave(paste0(out_path,"plots/corrected_normalised_data_pca.png"))
-  
+  ggsave(paste0(out_path,paste0("plots/",comparison_name,"_all_volcano_plots.png")), height = 30, width=20, units="cm")
 }
+
+# PCAs
+
+se_qc <- newSeqExpressionSet(assays(CDE_raw)$counts,
+                             phenoData = data.frame(colData(CDE_raw)),
+                             row.names = colnames(assays(CDE_raw)$counts))
+
+raw_logCPM <- consensusDE:::check_normalise(se_in = se_qc)
+
+generate_PCA_plot(raw_logCPM, metadata, "Raw")
+
+ggsave(paste0(out_path,"plots/raw_data_pca.png"))
+
+#se_qc_after <- newSeqExpressionSet(assays(CDE_run)$counts,
+#                             phenoData = data.frame(colData(CDE_run)),
+#                             row.names = colnames(assays(CDE_run)$counts))
+
+#final_logCPM <- consensusDE:::check_normalise(se_in = se_qc_after)
+
+#generate_PCA_plot(final_logCPM, metadata, "Normalised - Corrected")
+#ggsave(paste0(out_path,"plots/corrected_normalised_data_pca.png"))
+
+
+norm_logCPM <- fread(paste0(in_path, "/results/normalised_log_cpm.tsv")) %>%
+  column_to_rownames("V1") %>%
+  as.matrix()
+ 
+generate_PCA_plot(norm_logCPM, metadata, "Normalised - Corrected")
+
+ggsave(paste0(out_path,"plots/corrected_normalised_data_pca.png"))

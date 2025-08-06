@@ -291,7 +291,7 @@ if [ "$run5_alignqc" = true ]; then
   if [ "$do_submit" == true ]; then
     # wait for previous step to finish
     if [[ -n "${job_id_4:-}" ]]; then
-      job_id_5=$(qsub -W depend=afterok:"job_id_4" "$pbsdir/5_align_qc.pbs")
+      job_id_5=$(qsub -W depend=afterok:"$job_id_4" "$pbsdir/5_align_qc.pbs")
     else
       job_id_5=$(qsub "$pbsdir/5_align_qc.pbs")
     fi
@@ -302,26 +302,105 @@ fi
 
 #fi
 #---------------------------Step 6---------------------------#
-#if [ "$run6_quant" = true ]; then
-
-#fi
+if [ "$run6_quant" = true ]; then
+  
+  echo "Generating $pbsdir/6_quant.pbs"
+  
+  conc_jobs=$(calc_concurrent_jobs "$quant_threads_per_job" $threads)
+  quant_threads=$(calc_resource_per_job "$quant_threads_per_job" "$conc_jobs" "$threads")
+  
+  if [ "$quantification" = "featureCounts" ]; then
+    quant_mem=$(calc_resource_per_job 2 "$conc_jobs" "$memory")
+  fi
+  
+  $SCRIPT_DIR/qsub_pipeline.sh \
+    -c $config_file \
+    --steps 6 \
+    --pbs-script-name "$pbsdir/6_quant.pbs" \
+    --pbs-job-name "quant" \
+    --keep true \
+    --threads $quant_threads \
+    --pbs-mem "${quant_mem}GB" \
+    --pbs-walltime "24:00:00"
+  
+  if [ "$do_submit" == true ]; then
+    # wait for previous step to finish
+    if [[ -n "${job_id_5:-}" ]]; then
+      job_id_6=$(qsub -W depend=afterok:"$job_id_5" "$pbsdir/6_quant.pbs")
+    else
+      job_id_6=$(qsub "$pbsdir/6_quant.pbs")
+    fi
+  fi
+  
+fi
 #---------------------------Step 7---------------------------#
-#if [ "$run7_consensusDE" = true ]; then
-
-#fi
+if [ "$run7_consensusDE" = true ]; then
+  echo "Generating $pbsdir/7_consensusDE.pbs"
+  
+  consensusDE_mem=$(calc_resource_per_job 1 "$n_samples" "$memory")
+  
+  $SCRIPT_DIR/qsub_pipeline.sh \
+    -c $config_file \
+    --steps 7 \
+    --pbs-script-name "$pbsdir/7_consensusDE.pbs" \
+    --pbs-job-name "consensusDE" \
+    --keep true \
+    --threads 12 \
+    --pbs-mem "${consensusDE_mem}GB" \
+    --pbs-walltime "24:00:00"
+  
+  if [ "$do_submit" == true ]; then
+    # wait for previous step to finish
+    if [[ -n "${job_id_6:-}" ]]; then
+      job_id_7=$(qsub -W depend=afterok:"$job_id_6" "$pbsdir/7_consensusDE.pbs")
+    else
+      job_id_7=$(qsub "$pbsdir/7_consensusDE.pbs")
+    fi
+  fi
+fi
 #---------------------------Step 8---------------------------#
-#if [ "$run8_analyse_expression" = true ]; then
-
-#fi
+if [ "$run8_analyse_expression" = true ]; then
+  echo "Generating $pbsdir/8_analyse_expression.pbs"
+  
+  $SCRIPT_DIR/qsub_pipeline.sh \
+    -c $config_file \
+    --steps 8 \
+    --pbs-script-name "$pbsdir/8_analyse_expression.pbs" \
+    --pbs-job-name "analyse_expression" \
+    --keep true \
+    --threads 4 \
+    --pbs-mem "8GB" \
+    --pbs-walltime "4:00:00"
+  
+  if [ "$do_submit" == true ]; then
+    # wait for previous step to finish
+    if [[ -n "${job_id_7:-}" ]]; then
+      job_id_8=$(qsub -W depend=afterok:"$job_id_7" "$pbsdir/8_analyse_expression.pbs")
+    else
+      job_id_8=$(qsub "$pbsdir/8_analyse_expression.pbs")
+    fi
+  fi
+fi
 #---------------------------Step 9---------------------------#
-#if [ "$run9_enrichment_analysis" = true ]; then
-
-#fi
-
-
-# Parallel Steps
-## BBduk, STAR, quant, 
-
-
-# Simple Steps
-# raw QC, trim QC, align QC, 
+if [ "$run9_enrichment_analysis" = true ]; then
+  echo "Generating $pbsdir/9_enrichment_analysis.pbs"
+  
+  $SCRIPT_DIR/qsub_pipeline.sh \
+    -c $config_file \
+    --steps 9 \
+    --pbs-script-name "$pbsdir/9_enrichment_analysis.pbs" \
+    --pbs-job-name "enrichment" \
+    --keep true \
+    --threads 12 \
+    --pbs-mem "16GB" \
+    --pbs-walltime "8:00:00"
+  
+  if [ "$do_submit" == true ]; then
+    # wait for previous step to finish
+    if [[ -n "${job_id_8:-}" ]]; then
+      job_id_9=$(qsub -W depend=afterok:"$job_id_8" "$pbsdir/9_enrichment_analysis.pbs")
+    else
+      job_id_9=$(qsub "$pbsdir/9_enrichment_analysis.pbs")
+    fi
+  fi
+fi

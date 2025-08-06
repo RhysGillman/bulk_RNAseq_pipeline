@@ -13,6 +13,9 @@ params:
 ```{r setup, include=FALSE}
 Sys.setenv(RSTUDIO_PANDOC = "bin/pandoc-3.7.0.2/bin")
 knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(data.table)
+library(DT)
 ```
 
 ```{r parse_input, include=FALSE}
@@ -24,10 +27,24 @@ metadata_file <- params$metadata_file
 
 # Run Details
 
+```{r}
+cat(paste0("- **Report Generated on:** ", Sys.Date(), "\n"))
+
+version_file <- file.path(output_dir, "report", "tool_versions.txt")
+if(file.exists(version_file)){
+  cat(paste(readLines(version_file), collapse = "\n"))
+} else {
+  cat("*Program version file not found.*")
+}
+```
+
 
 # QC
+
 ## Raw Fastq Files
-```{r raw_QC, echo=FALSE, results='asis'}
+<details>
+  <summary>See Reports</summary>
+```{r raw_QC, results='asis'}
 multi_qc_path <- "qc/raw_reads/multiqc_report.html"
 fastqc_paths <- list.files("qc/raw_reads/", pattern = "*fastqc.html", full.names = T)
 if(file.exists(multi_qc_path)){
@@ -40,11 +57,15 @@ if(length(fastqc_paths)>0){
     cat(paste0("[",gsub("_fastqc.html","",basename(path))," FastQC Report](",path,"){target='_blank'}\n\n"))
   }
 }else{
-  cat("*No fastqc files detected.*\n\n")
+  cat("*No raw fastqc files detected.*\n\n")
 }
 ```
+</details> 
+
 ## Trimmed Fastq Files
-```{r trimQC, echo=FALSE, results='asis'}
+<details>
+  <summary>See Reports</summary>
+```{r trimQC, results='asis'}
 multi_qc_path <- "qc/trimmed_reads/multiqc_report.html"
 fastqc_paths <- list.files("qc/trimmed_reads/", pattern = "*fastqc.html", full.names = T)
 if(file.exists(multi_qc_path)){
@@ -57,11 +78,15 @@ if(length(fastqc_paths)>0){
     cat(paste0("[",gsub("_fastqc.html","",basename(path))," FastQC Report](",path,"){target='_blank'}\n\n"))
   }
 }else{
-  cat("*No fastqc files detected.*\n\n")
+  cat("*No trimmed fastqc files detected.*\n\n")
 }
 ```
+</details> 
+
 ## Alignment
-```{r trimQC, echo=FALSE, results='asis'}
+<details>
+  <summary>See Reports</summary>
+```{r alignmentQC, results='asis'}
 multi_qc_path <- "qc/alignment/multiqc_report.html"
 if(file.exists(multi_qc_path)){
   cat(paste0("[MultiQC Report](",multi_qc_path,"){target='_blank'}\n\n"))
@@ -69,4 +94,63 @@ if(file.exists(multi_qc_path)){
   cat("*MultiQC report not found.*\n\n")
 }
 ```
+</details>
+
 # Results
+
+## Number of DEGs Detected
+
+```{r DEG_summary}
+DEG_summary <- fread("consensusDE/DEG_summary.tsv")
+DT::datatable(
+  DEG_summary,
+  caption = htmltools::tags$caption(
+    style = 'caption-side: top; text-align: left;',
+    'Table 1: ', htmltools::em('DEG Summary')
+  ),
+  options = list(
+    pageLength = 5,
+    autoWidth = TRUE
+  )
+)
+```
+
+## PCA
+<details markdown="1">
+  <summary>See PCA Plots</summary>
+  
+### Raw Data
+
+```{r raw_pca_plot, echo=FALSE, out.width='45%', fig.align='center'}
+knitr::include_graphics("plots/raw_data_pca.png")
+```
+
+### Corrected and Normalised
+
+```{r final_pca_plot, echo=FALSE, out.width='45%', fig.align='center'}
+knitr::include_graphics("plots/corrected_normalised_data_pca.png")
+```
+
+</details> 
+
+## Volcano Plots
+<details>
+  <summary>See Volcano Plots</summary>
+```{r volcano_plots, echo=FALSE, out.width='45%', fig.align='center'}
+plots <- list.files("plots", pattern="all_volcano_plots.png", full.names=TRUE)
+knitr::include_graphics(plots)
+```
+</details>
+
+## Gene Set Enrichment (GSEA) Plots
+<details>
+  <summary>See GSEA Plots</summary>
+```{r gsea_plots, echo=FALSE, out.width='45%', fig.align='center'}
+plots <- list.files("plots", pattern="dotplot.png", full.names=TRUE)
+knitr::include_graphics(plots)
+
+plots <- list.files("plots", pattern="network.png", full.names=TRUE)
+knitr::include_graphics(plots)
+```
+</details>
+

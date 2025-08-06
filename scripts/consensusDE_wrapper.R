@@ -8,8 +8,11 @@ suppressPackageStartupMessages (library(tximport, quietly = T))
 suppressPackageStartupMessages (library(data.table, quietly = T))
 suppressPackageStartupMessages (library(consensusDE, quietly = T))
 suppressPackageStartupMessages (library(org.Hs.eg.db, quietly = T))
+suppressPackageStartupMessages (library(org.Mm.eg.db, quietly = T))
 suppressPackageStartupMessages (library(ggfortify, quietly = T))
 suppressPackageStartupMessages (library(foreach, quietly = T))
+suppressPackageStartupMessages (library(SummarizedExperiment, quietly = T))
+suppressPackageStartupMessages (library(sva, quietly = T))
 
 # Handling input arguments
 option_list = list(
@@ -19,6 +22,8 @@ option_list = list(
               help="Path to directory containing gene-level counts in .txt files", metavar ="InputPath"),
   make_option(c("-o", "--output"), type="character", default=NULL, 
               help="Path to output directory for results files.", metavar ="OutputPath"),
+  make_option(c("-S", "--species"), type="character", default="human", 
+              help="Species being studied", metavar ="Species"),
   make_option(c("-d", "--DEmethods"), type="character", default="deseq,edger,voom", 
               help="Comma separated list of DE methods to run", metavar ="OutputPath"),
   make_option(c("-a", "--alpha"), type="numeric", default=0.05, 
@@ -39,7 +44,9 @@ opt = parse_args(opt_parser);
 metadata_path <- opt$metadata
 in_path <- opt$input
 out_path <- opt$output
+species <- tolower(opt$species)
 DE_methods <- unlist(str_split(opt$DEmethods, ","))
+DEG_alpha <- opt$alpha
 gtf_path <- opt$gtf
 is_paired <- opt$paired
 strandedness <- opt$strandedness
@@ -129,6 +136,7 @@ if(length(unique(sample_table$batch))>1){
                             output_edger = paste0(out_path, "results/"),
                             output_deseq = paste0(out_path, "results/"),
                             output_combined = paste0(out_path,"results/"),
+                            ensembl_annotate= if (species=="human") org.Hs.eg.db else if (species=="mouse") org.Mm.eg.db else NULL,
                             ruv_correct = F)
   
 }else{
@@ -141,7 +149,7 @@ if(length(unique(sample_table$batch))>1){
                             output_edger = paste0(out_path, "results/"),
                             output_deseq = paste0(out_path, "results/"),
                             output_combined = paste0(out_path,"results/"),
-                            ensembl_annotate=org.Hs.eg.db,
+                            ensembl_annotate= if (species=="human") org.Hs.eg.db else if (species=="mouse") org.Mm.eg.db else NULL,
                             ruv_correct =T)
   
 }
@@ -171,11 +179,9 @@ result_paths <- list.files(paste0(out_path,"results/"), pattern = "*_recal.tsv",
 
 merged_results <- foreach(comp=result_paths, .combine = "bind_rows") %do% {
   
-  fread(comparison) %>% mutate(comparison=gsub("_combined_results_recal.tsv","",basename(comp)))
+  fread(comp) %>% mutate(comparison=gsub("_combined_results_recal.tsv","",basename(comp)))
   
 }
-  
-DEG_alpha=0.05
 
 summary_DEG <- merged_results %>%
   dplyr::select(comparison,ID,p_intersect,deseq_adj_p,edger_adj_p,voom_adj_p) %>%

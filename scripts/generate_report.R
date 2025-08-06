@@ -24,6 +24,12 @@ file.copy(
   to        = report_dir,
   recursive = TRUE
 )
+file.copy(
+  from      = file.path(output_dir, "plots"),
+  to        = report_dir,
+  recursive = TRUE
+)
+
 
 message(paste0("Updating report in ",report_dir))
 

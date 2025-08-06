@@ -196,8 +196,6 @@ rm -f "$early_log"
 RESOURCE_LOG="$output_dir/logs/resource_utilisation_${timestamp}.log"
 : > "$RESOURCE_LOG"      # truncate or create
 
-
-
 echo -e "\n\n"
 echo "Config file read successfully"
 echo "Running the following steps of pipeline"
@@ -213,6 +211,16 @@ echo "7 - ConsensusDE: $run7_consensusDE"
 echo "8 - Analyse Expression: $run8_analyse_expression"
 echo "9 - Enrichment Analysis: $run9_enrichment_analysis"
 echo -e "\n\n"
+
+# Tool version logging
+
+version_log="$output_dir/report/tool_versions.txt"
+mkdir -p "$(dirname "$version_log")"
+echo "Program Versions Used:" > "$version_log"
+echo "----------------------" >> "$version_log"
+
+
+
 
 ##################
 # More Functions #
@@ -338,9 +346,10 @@ if [ "$run1_rawqc" = true ]; then
   
   Rscript --no-save --no-restore "scripts/generate_report.R" -d "$output_dir" -m $metadata
   
+  
 fi
 
-
+echo "FastQC: $($fastqc_path/fastqc --version 2>&1)" >> "$version_log"
 
 #-------------------------------------------
 
@@ -422,6 +431,8 @@ if [ "$run2_trimming" = true ]; then
 
 fi
 
+echo "bbduk: $($bbmap_path/bbduk.sh --version 2>&1 | grep "BBTools" )" >> "$version_log"
+
 #-------------------------------------------
 
 if [ "$run3_trimqc" = true ]; then
@@ -460,6 +471,7 @@ if [ "$run3_trimqc" = true ]; then
   
   Rscript --no-save --no-restore "scripts/generate_report.R" -d "$output_dir" -m $metadata
   
+  echo "FastQC: $($fastqc_path/fastqc --version 2>&1)" >> "$version_log"
 fi
 
 #-------------------------------------------
@@ -598,8 +610,11 @@ if [ "$run4_alignment" = true ]; then
   
   echo "Alignment files are available in $output_dir/intermediate_files/"
   
-  # make sure genome is unloaded
-  "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" --genomeLoad Remove
+  # make sure genome is unloaded, hide output
+  "$STAR_path/STAR" \
+    --genomeDir "$STAR_index_dir/${read_lengths}bp" \
+    --genomeLoad Remove \
+    > /dev/null 2>&1 || true
 
 
 	for sample in "${!r1_files[@]}"; do
@@ -607,6 +622,9 @@ if [ "$run4_alignment" = true ]; then
   done
   
 fi
+
+
+echo "STAR: $($STAR_path/STAR --version 2>&1)" >> "$version_log"
 
 #-------------------------------------------
 
@@ -796,6 +814,15 @@ if [ "$run6_quant" = true ]; then
   
 fi
 
+
+if [ "$quantification" = "RSEM" ]; then
+  echo "featureCounts: $($rsem_path/rsem-calculate-expression --version 2>&1)" >> "$version_log"
+fi
+if [ "$quantification" = "featureCounts" ]; then
+  echo "featureCounts: $($subread_path/featureCounts -v 2>&1)" >> "$version_log"
+fi
+
+
 #-------------------------------------------
 
 if [ "$run7_consensusDE" = true ]; then
@@ -851,12 +878,15 @@ if [ "$run7_consensusDE" = true ]; then
         --metadata "$metadata" \
         --input "$output_dir/consensusDE/input" \
         --output "$output_dir/consensusDE" \
+        --species "$species" \
         --DEmethods "$DEmethods" \
+        --alpha 0.05 \
         --gtf "$ref_gtf" \
         --paired "$paired" \
         --strandedness "$s" \
         --threads "$threads"
   
+  mkdir -p "$output_dir/results"
   # Copy DEG summary to main results
   cp "$output_dir/consensusDE/DEG_summary.tsv" "$output_dir/results/DEG_summary.tsv"
   
@@ -917,7 +947,14 @@ if [ "$run9_enrichment_analysis" = true ]; then
         --gsea-set-max "$gsea_set_max" \
         --gsea-set-min "$gsea_set_min" \
         --log "$output_dir/gsea/gsea.log"
+  
+  cp "$output_dir"/gsea/plots/* "$output_dir/plots"
+  
 fi
+
+Rscript --no-save --no-restore scripts/package_versions.R 2>&1 >> "$version_log"
+
+echo "GSEA: $(basename $gsea_path)" >> "$version_log"
 
 
 Rscript --no-save --no-restore "scripts/generate_report.R" -d "$output_dir" -m $metadata
