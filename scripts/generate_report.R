@@ -18,19 +18,21 @@ report_dir <- file.path(output_dir,"report")
 
 dir.create(report_dir, showWarnings = F)
 
-# copy needed dirs to report dir
-file.copy(
-  from      = file.path(output_dir, "qc"),
-  to        = report_dir,
-  recursive = TRUE
-)
-file.copy(
-  from      = file.path(output_dir, "plots"),
-  to        = report_dir,
-  recursive = TRUE
-)
-
-
+if (dir.exists(file.path(output_dir, "qc"))) {
+  # copy needed dirs to report dir
+  invisible(file.copy(
+    from      = file.path(output_dir, "qc"),
+    to        = report_dir,
+    recursive = TRUE
+  ))
+}
+if (dir.exists(file.path(output_dir, "plots"))) {
+  invisible(file.copy(
+    from      = file.path(output_dir, "plots"),
+    to        = report_dir,
+    recursive = TRUE
+  ))
+}
 message(paste0("Updating report in ",report_dir))
 
 render(

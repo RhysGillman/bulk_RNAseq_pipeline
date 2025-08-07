@@ -27,14 +27,14 @@ metadata_file <- params$metadata_file
 
 # Run Details
 
-```{r}
-cat(paste0("- **Report Generated on:** ", Sys.Date(), "\n"))
+```{r run_details, results='asis'}
+cat(paste0("**Report Generated on:** ", Sys.Date(), "\n\n"))
 
 version_file <- file.path(output_dir, "report", "tool_versions.txt")
 if(file.exists(version_file)){
-  cat(paste(readLines(version_file), collapse = "\n"))
+  cat(paste(readLines(version_file), collapse = "\n\n"))
 } else {
-  cat("*Program version file not found.*")
+  cat("*Program version file not found.*\n\n")
 }
 ```
 
@@ -126,6 +126,8 @@ DT::datatable(
 ```{r raw_pca_plot, echo=FALSE, out.width='45%', fig.align='center'}
 if(file.exists("plots/raw_data_pca.png")){
   knitr::include_graphics("plots/raw_data_pca.png")
+} else {
+  cat("*No raw data PCA plot found.*\n\n")
 }
 ```
 
@@ -134,6 +136,8 @@ if(file.exists("plots/raw_data_pca.png")){
 ```{r final_pca_plot, echo=FALSE, out.width='45%', fig.align='center'}
 if(file.exists("plots/corrected_normalised_data_pca.png")){
   knitr::include_graphics("plots/corrected_normalised_data_pca.png")
+} else {
+  cat("*No corrected and normalised PCA plot found.*\n\n")
 }
 ```
 
@@ -144,7 +148,11 @@ if(file.exists("plots/corrected_normalised_data_pca.png")){
   <summary>See Volcano Plots</summary>
 ```{r volcano_plots, echo=FALSE, out.width='45%', fig.align='center'}
 plots <- list.files("plots", pattern="all_volcano_plots.png", full.names=TRUE)
-knitr::include_graphics(plots)
+if (length(plots) > 0) {
+  knitr::include_graphics(plots)
+} else {
+  cat("*No volcano plots found.*\n\n")
+}
 ```
 </details>
 
@@ -153,10 +161,18 @@ knitr::include_graphics(plots)
   <summary>See GSEA Plots</summary>
 ```{r gsea_plots, echo=FALSE, out.width='45%', fig.align='center'}
 plots <- list.files("plots", pattern="dotplot.png", full.names=TRUE)
-knitr::include_graphics(plots)
+if (length(plots) > 0) {
+  knitr::include_graphics(plots)
+} else {
+  cat("*No dotplot figures found.*\n\n")
+}
 
 plots <- list.files("plots", pattern="network.png", full.names=TRUE)
-knitr::include_graphics(plots)
+if (length(plots) > 0) {
+  knitr::include_graphics(plots)
+} else {
+  cat("*No network plots found.*\n\n")
+}
 ```
 </details>
 
