@@ -252,9 +252,10 @@ if [ "$run4_alignment" = true ]; then
   per_job_star_mem=$(calc_resource_per_job 5 "$conc_jobs" "$memory")
   # add larger armount for shared genome load based on index size
   index_dir="$STAR_index_dir/${read_lengths}bp"
-  # measure number of GB for index
-  base_index_gb=$(du -sBG --apparent-size "$index_dir" \
-  | cut -f1 | sed 's/G$//')
+  
+  # Estimate index memory usage as 10 × size of reference FASTA
+  fasta_size_gb=$(du -sBG --apparent-size "$ref_fasta" | cut -f1 | sed 's/G$//')
+  base_index_gb=$(( fasta_size_gb * 10 ))
                
   star_mem=$(( per_job_star_mem + base_index_gb + 5))
   
