@@ -646,7 +646,8 @@ if [ "$run4_alignment" = true ]; then
     
   # Trap for cleanup on exit
   trap 'echo "Cleaning up STAR shared genome memory..."; \
-        "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" --genomeLoad Remove' EXIT
+      "$STAR_path/STAR" --genomeDir "$STAR_index_dir/${read_lengths}bp" --genomeLoad Remove > /dev/null 2>&1 || true' EXIT
+
 
   if [ "$paired" = true ]; then
     # loop over samples and launch STAR in background, throttled to $star_jobs
@@ -834,8 +835,11 @@ if [ "$run6_quant" = true ]; then
   if [ "$stranded_reads" = "auto" ]; then
     echo "Auto-detecting strandedness..."
     source "$RSeQC_path/bin/activate"
-    
-    keys=( "${!r1_files[@]}" )
+    if [ "$paired" = true ]; then
+      keys=( "${!r1_files[@]}" )
+    elif [ "$paired" = false ]; then
+      keys=( "${!all_files[@]}" )
+    fi
     first_sample="${keys[0]}"
     first_sample_bam="$output_dir/intermediate_files/${first_sample}_Aligned.sortedByCoord.out.bam"
     s=$(./scripts/guess_strandedness.sh "$first_sample_bam" "$ref_exon_bed")
@@ -1054,7 +1058,11 @@ if [ "$run7_consensusDE" = true ]; then
       echo "Auto-detecting strandedness..."
       source "$RSeQC_path/bin/activate"
       
-      keys=( "${!r1_files[@]}" )
+      if [ "$paired" = true ]; then
+        keys=( "${!r1_files[@]}" )
+      elif [ "$paired" = false ]; then
+        keys=( "${!all_files[@]}" )
+      fi
       first_sample="${keys[0]}"
       first_sample_bam="$output_dir/intermediate_files/${first_sample}_Aligned.sortedByCoord.out.bam"
       s=$(./scripts/guess_strandedness.sh "$first_sample_bam" "$ref_exon_bed")

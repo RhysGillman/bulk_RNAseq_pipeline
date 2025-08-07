@@ -28,8 +28,15 @@ tmpf=$(mktemp)
 infer_experiment.py -r "$BED" -i "$BAM" > "$tmpf"
 
 # extract the two strandedness fractions
-fwd_frac=$(grep 'Fraction of reads explained by "1++,1--,2+-,2-+"' "$tmpf" | cut -d: -f2 | xargs)
-rev_frac=$(grep 'Fraction of reads explained by "1+-,1-+,2++,2--"' "$tmpf" | cut -d: -f2 | xargs)
+fwd_frac=$(grep -E 'Fraction of reads explained by "(1\+\+,1--,2\+-,2-\+|[\+][\+],[-][-])"' "$tmpf" | head -n 1 | cut -d: -f2 | xargs)
+rev_frac=$(grep -E 'Fraction of reads explained by "(1\+\-,1-\+,2\+\+,2--|[\+][-],[-][\+])"' "$tmpf" | head -n 1 | cut -d: -f2 | xargs)
+
+if [[ -z "$fwd_frac" || -z "$rev_frac" ]]; then
+  echo "Error: Could not extract strandedness fractions from infer_experiment.py output." >&2
+  cat "$tmpf" >&2
+  rm -f "$tmpf"
+  exit 1
+fi
 
 rm -f "$tmpf"
 

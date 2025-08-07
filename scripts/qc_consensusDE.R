@@ -67,7 +67,7 @@ for(comparison in result_paths){
   
   # Volcano plot using p_intersect
   p1 <- generate_volcano_plot(data = merged_results,
-                         labels = "symbol",
+                         labels = if ("symbol" %in% colnames(merged_results)) "symbol" else "ID",
                          pcol = "p_intersect",
                          l2fccol = "LogFC",
                          rank_col = "rank_sum",
@@ -79,7 +79,7 @@ for(comparison in result_paths){
   p_methods <- foreach(method=DE_methods) %do% {
     
     generate_volcano_plot(data = merged_results,
-                          labels = "symbol",
+                          labels = if ("symbol" %in% colnames(merged_results)) "symbol" else "ID",
                           pcol = paste0(method,"_adj_p"),
                           l2fccol = "LogFC",
                           rank_col = paste0(method,"_rank"),
